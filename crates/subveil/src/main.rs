@@ -81,10 +81,9 @@ fn main() -> anyhow::Result<()> {
         {
             Ok(_) => {
                 tracing::info!("control window opened");
-                cx.activate(true);
             }
             Err(error) => {
-                tracing::error!(%error, "application startup failed");
+                tracing::error!(?error, "application startup failed");
                 cx.quit();
                 std::process::exit(1);
             }
