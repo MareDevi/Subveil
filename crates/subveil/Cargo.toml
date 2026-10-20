@@ -13,6 +13,7 @@ gpui-component.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 subveil-core.workspace = true
+subveil-audio = { path = "../subveil-audio" }
 
 [lints]
 workspace = true

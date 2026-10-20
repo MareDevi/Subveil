@@ -17,6 +17,10 @@ run = "cargo run --locked -p subveil"
 description = "Launch an offline mock subtitle overlay"
 run = "cargo run --locked -p subveil -- --demo"
 
+[tasks."audio:probe"]
+description = "Validate local PipeWire capture: optional seconds and sample rate"
+run = "cargo run --locked -p subveil-audio --example probe --"
+
 [tasks.fmt]
 description = "Format Rust sources"
 run = "cargo fmt --all"
