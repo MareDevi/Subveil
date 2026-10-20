@@ -10,8 +10,12 @@ description = "Build the native application"
 run = "cargo build --workspace --locked"
 
 [tasks.run]
-description = "Launch the native control window"
+description = "Launch the native subtitle control window"
 run = "cargo run --locked -p subveil"
+
+[tasks.demo]
+description = "Launch an offline mock subtitle overlay"
+run = "cargo run --locked -p subveil -- --demo"
 
 [tasks.fmt]
 description = "Format Rust sources"
@@ -30,5 +34,5 @@ description = "Run workspace tests"
 run = "cargo test --workspace --locked"
 
 [tasks.check]
-description = "Run all M00 quality gates sequentially"
+description = "Run all quality gates sequentially"
 run = ["mise run fmt:check", "mise run build", "mise run clippy", "mise run test"]
