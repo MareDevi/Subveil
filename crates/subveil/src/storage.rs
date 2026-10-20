@@ -73,6 +73,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn file_round_trip_and_invalid_file_preservation() -> anyhow::Result<()> {
+        let directory =
+            env::temp_dir().join(format!("subveil-storage-test-{}", std::process::id()));
+        fs::create_dir(&directory)?;
+        let path = directory.join("subtitle.toml");
+        let result = (|| -> anyhow::Result<()> {
+            assert_eq!(load(&path)?, OverlaySettings::default());
+            let settings = OverlaySettings {
+                font_size: 44.,
+                ..Default::default()
+            };
+            save(&path, &settings)?;
+            assert_eq!(load(&path)?, settings);
+            let invalid = "font_size = nan";
+            fs::write(&path, invalid)?;
+            assert!(load(&path).is_err());
+            assert_eq!(fs::read_to_string(&path)?, invalid);
+            fs::write(&path, "x".repeat(65_537))?;
+            assert!(load(&path).is_err());
+            Ok(())
+        })();
+        fs::remove_dir_all(directory)?;
+        result
+    }
+
+    #[test]
     fn xdg_path_must_be_absolute_and_empty_values_use_home() -> anyhow::Result<()> {
         assert_eq!(
             resolve_path(Some("relative".into()), Some("/home/test".into()))?,

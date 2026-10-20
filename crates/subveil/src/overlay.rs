@@ -53,6 +53,7 @@ impl Render for OverlayView {
                     .line_height(gpui::relative(1.4))
                     .text_color(rgb(settings.source_color))
                     .line_clamp(settings.max_lines)
+                    .text_ellipsis()
                     .child(subtitle.transcript.text.clone()),
             );
         }
@@ -75,6 +76,7 @@ impl Render for OverlayView {
                     .line_height(gpui::relative(1.4))
                     .text_color(rgb(settings.translation_color))
                     .line_clamp(settings.max_lines)
+                    .text_ellipsis()
                     .child(translation.to_owned()),
             );
         }
