@@ -59,9 +59,11 @@ impl Render for OverlayView {
         }
         if settings.display_mode != DisplayMode::Source {
             let translation = match &subtitle.translation {
-                TranslationState::Complete(text) => text.as_str(),
-                TranslationState::Pending => "正在生成模拟译文…",
-                TranslationState::Failed(_) => "模拟翻译失败",
+                TranslationState::Complete(text) | TranslationState::Streaming(text) => {
+                    text.as_str()
+                }
+                TranslationState::Pending => "正在生成译文…",
+                TranslationState::Failed(_) => "翻译失败",
                 TranslationState::NotRequested => {
                     if subtitle.is_final {
                         ""

@@ -116,6 +116,19 @@ impl Session {
                     changed |= self.subtitles.apply(event, now_ms);
                 }
             }
+            for _ in 0..64 {
+                let Some(translation) = recognition.pop_translation() else {
+                    break;
+                };
+                if !self.asr_stopping {
+                    changed |= self.subtitles.apply_provider_translation(
+                        translation.key,
+                        translation.text,
+                        translation.is_final,
+                        now_ms,
+                    );
+                }
+            }
             if recognition.is_finished() {
                 if !self.asr_stopping && !self.asr.status.starts_with("识别失败") {
                     self.asr.status = "识别线程意外退出；请检查后重启 ASR".into();
@@ -214,13 +227,26 @@ impl Session {
         self.recognition.is_some()
     }
 
-    pub fn cycle_asr_provider(&mut self, cx: &mut Context<Self>) {
+    pub fn select_asr_provider(&mut self, provider: subveil_asr::Provider, cx: &mut Context<Self>) {
         if self.recognition.is_none() {
-            self.asr_config.provider = match self.asr_config.provider {
-                subveil_asr::Provider::Mock => subveil_asr::Provider::Deepgram,
-                subveil_asr::Provider::Deepgram => subveil_asr::Provider::Sherpa,
-                subveil_asr::Provider::Sherpa => subveil_asr::Provider::Mock,
-            };
+            self.asr_config.provider = provider;
+            if self.audio_capture.is_none()
+                && let Some(rate) = provider.required_rate()
+            {
+                self.audio.sample_rate = rate;
+            }
+            cx.notify();
+        }
+    }
+
+    pub fn cycle_target_language(&mut self, cx: &mut Context<Self>) {
+        if self.recognition.is_none() {
+            self.asr_config.target_language = match self.asr_config.target_language.as_str() {
+                "zh" => "en",
+                "en" => "ja",
+                _ => "zh",
+            }
+            .into();
             cx.notify();
         }
     }
@@ -248,8 +274,11 @@ impl Session {
             return;
         }
         let mut config = self.asr_config.clone();
-        config.sample_rate = self.audio.sample_rate;
-        config.allow_cloud = config.provider == subveil_asr::Provider::Deepgram;
+        config.sample_rate = config
+            .provider
+            .required_rate()
+            .unwrap_or(self.audio.sample_rate);
+        config.allow_cloud = config.provider != subveil_asr::Provider::Mock;
         let result = (|| -> anyhow::Result<_> {
             config.validate()?;
             let (capture, frames) = subveil_audio::Capture::start_with_frames(config.sample_rate)?;
@@ -266,14 +295,20 @@ impl Session {
                 self.recognition = Some(recognition);
                 self.asr_stopping = false;
                 self.audio_stopping = false;
-                self.message = if self.asr_config.provider == subveil_asr::Provider::Deepgram {
-                    "云端 ASR 已选择：系统音频上传至 Deepgram；点击停止可撤销本次上传。"
-                } else if self.asr_config.provider == subveil_asr::Provider::Mock {
-                    "Mock ASR 仅按音频能量输出预设样本，不是真实识别。"
+                self.message = if self.asr_config.provider == subveil_asr::Provider::Mock {
+                    "Mock ASR 仅按音频能量输出预设样本，不是真实识别。".into()
                 } else {
-                    "本地 streaming ASR 已启动；音频不上传，语言能力取决于模型。"
-                }
-                .into();
+                    format!(
+                        "{} 已启动：系统音频发送至 {}；点击停止撤销本次上传。{}",
+                        self.asr_config.provider.name(),
+                        self.asr_config.provider.destination(),
+                        if self.asr_config.provider.translates() {
+                            "显示服务自带译文，不播放返回语音。"
+                        } else {
+                            "此服务仅识别原文。"
+                        }
+                    )
+                };
                 self.show_overlay(cx);
             }
             Err(error) => self.message = format!("无法启动 ASR：{error}"),

@@ -26,7 +26,7 @@ description = "Explicit ASR diagnostic; cloud requires --allow-upload"
 run = "timeout 90s cargo run --locked -p subveil-asr --example asr_probe --"
 
 [tasks."asr:check"]
-description = "Build, lint and test the optional local sherpa backend"
+description = "Build, lint and test every ASR target"
 run = ["cargo build --workspace --all-features --locked", "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings", "timeout 90s cargo test --workspace --all-features --locked"]
 
 [tasks.fmt]

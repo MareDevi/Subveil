@@ -44,6 +44,8 @@ pub enum TranslationState {
     NotRequested,
     /// A translation is in flight.
     Pending,
+    /// A cloud speech service is still revising its own translation.
+    Streaming(String),
     /// A matching translation completed.
     Complete(String),
     /// A matching translation failed.
@@ -163,6 +165,36 @@ impl SubtitleState {
         while self.entries.len() > self.history_limit {
             self.entries.pop_front();
         }
+        true
+    }
+
+    /// Apply an integrated speech service's translation to the exact source revision.
+    /// Partial translations may accompany Partial speech; stale and expired work is rejected.
+    pub fn apply_provider_translation(
+        &mut self,
+        key: SegmentKey,
+        text: String,
+        is_final: bool,
+        now_ms: u64,
+    ) -> bool {
+        let ttl_ms = self.ttl_ms;
+        if text.trim().is_empty() || text.len() > 16_384 {
+            return false;
+        }
+        let Some(entry) = self.matching(key) else {
+            return false;
+        };
+        if now_ms >= entry.expires_at_ms
+            || matches!(entry.translation, TranslationState::Complete(_))
+        {
+            return false;
+        }
+        entry.translation = if is_final {
+            TranslationState::Complete(text)
+        } else {
+            TranslationState::Streaming(text)
+        };
+        entry.expires_at_ms = now_ms.saturating_add(ttl_ms);
         true
     }
 
@@ -335,5 +367,45 @@ mod tests {
         invalid.start_ms = 200;
         assert!(!state.apply(TranscriptEvent::Final(invalid), 0));
         assert!(!state.apply(TranscriptEvent::Partial(segment(1, 1, 1, " ")), 0));
+    }
+}
+
+#[cfg(test)]
+mod integrated_translation_tests {
+    use super::*;
+    fn segment(revision: u32) -> TranscriptSegment {
+        TranscriptSegment {
+            key: SegmentKey {
+                session_id: 1,
+                segment_id: 1,
+                revision,
+            },
+            text: "source".into(),
+            language: Some("en".into()),
+            start_ms: 0,
+            end_ms: 100,
+        }
+    }
+    #[test]
+    fn provider_translation_tracks_partial_revision_and_rejects_late_results() {
+        let mut state = SubtitleState::new(1, 8, 1_000);
+        state.apply(TranscriptEvent::Partial(segment(1)), 0);
+        assert!(state.apply_provider_translation(segment(1).key, "译文".into(), false, 10));
+        assert!(matches!(
+            state.current().map(|r| &r.translation),
+            Some(TranslationState::Streaming(_))
+        ));
+        state.apply(TranscriptEvent::Final(segment(2)), 20);
+        assert!(!state.apply_provider_translation(segment(1).key, "旧译文".into(), true, 30));
+        assert!(state.apply_provider_translation(segment(2).key, "最终译文".into(), true, 30));
+        assert!(!state.apply_provider_translation(segment(2).key, "重复修订".into(), false, 40));
+    }
+    #[test]
+    fn expired_or_cancelled_provider_translations_never_revive_subtitles() {
+        let mut state = SubtitleState::new(1, 8, 1_000);
+        state.apply(TranscriptEvent::Final(segment(1)), 0);
+        assert!(!state.apply_provider_translation(segment(1).key, "过期".into(), true, 1_000));
+        state.reset(2);
+        assert!(!state.apply_provider_translation(segment(1).key, "取消".into(), true, 1_001));
     }
 }

@@ -10,14 +10,9 @@ fn main() -> anyhow::Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     ensure!(
         (1..=6).contains(&args.len()),
-        "usage: probe mock|deepgram|sherpa [SECONDS] [en|ja] [RATE] [--allow-upload] [--print-transcripts]"
+        "usage: asr_probe PROVIDER [SECONDS] [en|ja] [RATE] [--allow-upload] [--print-transcripts]"
     );
-    let provider = match args[0].as_str() {
-        "mock" => Provider::Mock,
-        "deepgram" => Provider::Deepgram,
-        "sherpa" => Provider::Sherpa,
-        _ => anyhow::bail!("provider must be mock, deepgram or sherpa"),
-    };
+    let provider = Provider::ALL.into_iter().find(|p| p.id() == args[0]).context("未知 Provider；可用 mock/deepgram/alibaba/gemini/volcano/tencent/baidu/openai/azure-openai/xai/custom-dashscope/custom-openai")?;
     let positional: Vec<_> = args[1..].iter().filter(|a| !a.starts_with("--")).collect();
     ensure!(
         positional.len() <= 3
@@ -43,7 +38,7 @@ fn main() -> anyhow::Result<()> {
             .get(2)
             .map(|s| s.parse::<u32>())
             .transpose()?
-            .unwrap_or(16_000),
+            .unwrap_or(provider.required_rate().unwrap_or(16_000)),
         allow_cloud: args.iter().any(|s| s == "--allow-upload"),
         ..Default::default()
     };
@@ -53,7 +48,7 @@ fn main() -> anyhow::Result<()> {
         provider,
         config.sample_rate,
         config.language,
-        config.allow_cloud && provider == Provider::Deepgram
+        config.allow_cloud && provider != Provider::Mock
     );
     let (capture, frames) = subveil_audio::Capture::start_with_frames(config.sample_rate)?;
     let worker = Recognition::start(config, 1, frames)?;
@@ -66,6 +61,11 @@ fn main() -> anyhow::Result<()> {
             events += 1;
             if print_text {
                 println!("{event:?}");
+            }
+        }
+        while let Some(translation) = worker.pop_translation() {
+            if print_text {
+                println!("{translation:?}");
             }
         }
         if last.elapsed() >= Duration::from_secs(1) {

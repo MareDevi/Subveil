@@ -3,7 +3,7 @@ use gpui::{
     Styled, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, div, prelude::*,
     px, relative, rgb, size,
 };
-use gpui_component::{Root, button::Button};
+use gpui_component::{Disableable, Root, Selectable, button::Button};
 use subveil_core::{config::DisplayMode, subtitle::TranslationState};
 
 use crate::session::Session;
@@ -36,6 +36,19 @@ impl Render for ControlView {
         let session = self.session.read(cx);
         let settings = &session.settings;
         let row = || div().flex().flex_wrap().items_center().gap_2();
+        let mut providers = row();
+        for provider in subveil_asr::Provider::ALL {
+            providers = providers.child(
+                button(
+                    provider.id(),
+                    provider.name(),
+                    &self.session,
+                    move |s, cx| s.select_asr_provider(provider, cx),
+                )
+                .selected(provider == session.asr_config.provider)
+                .disabled(session.asr_active() || session.asr_stopping),
+            );
+        }
         let mut preview = div()
             .id("subtitle-preview")
             .h(px(132.))
@@ -50,11 +63,13 @@ impl Render for ControlView {
         if let Some(subtitle) = session.subtitles.current() {
             preview = preview.child(subtitle.transcript.text.clone()).child(
                 match &subtitle.translation {
-                    TranslationState::Complete(text) => text.clone(),
-                    TranslationState::Pending => "正在生成模拟译文…".into(),
-                    TranslationState::Failed(error) => format!("模拟翻译失败：{error}"),
+                    TranslationState::Complete(text) | TranslationState::Streaming(text) => {
+                        text.clone()
+                    }
+                    TranslationState::Pending => "正在生成译文…".into(),
+                    TranslationState::Failed(error) => format!("翻译失败：{error}"),
                     TranslationState::NotRequested => if subtitle.is_final {
-                        "原文已确定；尚未启用翻译。"
+                        "原文已确定；等待服务译文或使用仅识别服务。"
                     } else {
                         "正在识别…"
                     }
@@ -97,7 +112,7 @@ impl Render for ControlView {
             .text_color(rgb(0xe8edf5))
             .child(div().text_3xl().child("Subveil"))
             .child("M03 · ASR Provider 与 Wayland 字幕浮窗")
-            .child("默认不上传音频。云端 ASR 仅在点击「同意上传并开始」后发送系统音频至 Deepgram。")
+            .child("默认不上传。点击「同意上传并开始」才向所选服务发送系统音频；云服务可能收费。")
             .child(
                 row()
                     .child(button(
@@ -156,10 +171,12 @@ impl Render for ControlView {
             )
             .child(div().flex().flex_col().gap_2().p_4().rounded_lg().bg(rgb(0x1b2432))
                 .child(row()
-                    .child(button("asr-provider", format!("ASR {:?} · 停止时切换", session.asr_config.provider), &self.session, Session::cycle_asr_provider))
-                    .child(button("asr-language", format!("语言 {}", session.asr_config.language), &self.session, Session::cycle_asr_language))
-                    .child(button("asr-start", if session.asr_stopping { "正在停止…" } else if session.asr_active() { "停止 ASR 与音频" } else if session.asr_config.provider == subveil_asr::Provider::Deepgram { "同意上传并开始 Deepgram ASR" } else { "开始本地 ASR / Mock" }, &self.session, Session::toggle_asr)))
-                .child("Deepgram：音频上传至 api.deepgram.com，可能产生服务费用。Mock：仅预设样本。本地 sherpa：需要模型和构建特性。")
+                    .child(format!("当前服务：{}", session.asr_config.provider.name()))
+                    .child(button("asr-language", format!("源语种 {}", if session.asr_config.provider.automatic_language() { "自动识别" } else { &session.asr_config.language }), &self.session, Session::cycle_asr_language).disabled(session.asr_active() || session.asr_stopping || session.asr_config.provider.automatic_language()))
+                    .child(button("asr-target", format!("目标 {}", session.asr_config.target_language), &self.session, Session::cycle_target_language).disabled(session.asr_active() || session.asr_stopping || !session.asr_config.provider.translates()))
+                    .child(button("asr-start", if session.asr_stopping { "正在停止…" } else if session.asr_active() { "停止 ASR 与音频" } else if session.asr_config.provider != subveil_asr::Provider::Mock { "同意上传并开始" } else { "开始 Mock ASR" }, &self.session, Session::toggle_asr)))
+                .child(providers)
+                .child(format!("音频目标：{}。{}", session.asr_config.provider.destination(), if session.asr_config.provider.translates() { "显示接口自带译文；返回语音不播放。" } else { "此服务仅输出原文。" }))
                 .child(session.asr.status.clone())
                 .child(format!("识别重置 {} · ASR 输入丢块 {} · 结果丢事件 {}", session.asr.resets, session.asr.dropped_audio, session.asr.dropped_events)))
             .child(div().text_sm().child(session.message.clone()))

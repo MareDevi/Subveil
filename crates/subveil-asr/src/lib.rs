@@ -2,7 +2,9 @@
 #![deny(missing_docs)]
 
 mod cloud;
-mod local;
+mod mock;
+mod protocols;
+mod providers;
 mod vad;
 pub use vad::VadConfig;
 
@@ -18,15 +20,18 @@ use std::{
 use subveil_audio::{AudioFrame, FrameReceiver};
 use subveil_core::subtitle::{SegmentKey, TranscriptEvent, TranscriptSegment};
 
-/// Recognition backend. Cloud requires explicit per-start opt-in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Provider {
-    /// Audio-driven deterministic text; never speech recognition.
-    Mock,
-    /// Deepgram Listen v1, over TLS.
-    Deepgram,
-    /// Local streaming transducer; requires the `sherpa` build feature.
-    Sherpa,
+pub use providers::Provider;
+
+/// A service-provided translation, correlated to an exact source revision.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct ProviderTranslation {
+    /// Source identity and revision; old responses must be rejected.
+    pub key: SegmentKey,
+    /// Translated text, with no synthesized audio playback.
+    pub text: String,
+    /// Whether the service finalized this translation.
+    pub is_final: bool,
 }
 
 /// Per-session settings; credentials are never retained here.
@@ -34,9 +39,11 @@ pub enum Provider {
 pub struct Config {
     /// Chosen backend.
     pub provider: Provider,
-    /// Explicit language: en or ja; local models must match.
+    /// Source language hint: en or ja; automatic providers ignore this hint.
     pub language: String,
-    /// Capture rate, matching local model feature extraction.
+    /// Target language for services that return translations.
+    pub target_language: String,
+    /// Capture rate, matching the selected service requirements.
     pub sample_rate: u32,
     /// Explicit permission to upload this session's audio.
     pub allow_cloud: bool,
@@ -48,6 +55,7 @@ impl Default for Config {
         Self {
             provider: Provider::Mock,
             language: "en".into(),
+            target_language: "zh".into(),
             sample_rate: 16_000,
             allow_cloud: false,
             vad: VadConfig::default(),
@@ -66,16 +74,30 @@ impl Config {
             "ASR rate must be 8000..=48000 Hz"
         );
         self.vad.validate()?;
-        match self.provider {
-            Provider::Deepgram => {
-                anyhow::ensure!(
-                    self.allow_cloud,
-                    "cloud audio upload requires explicit opt-in"
-                );
-                cloud::credential()?;
-            }
-            Provider::Sherpa => local::validate()?,
-            Provider::Mock => {}
+        if self.provider == Provider::Volcano {
+            anyhow::ensure!(
+                self.language == "en" || matches!(self.target_language.as_str(), "zh" | "en"),
+                "火山 S2T 方向必须包含中文或英语"
+            );
+        }
+        anyhow::ensure!(
+            matches!(self.target_language.as_str(), "zh" | "en" | "ja"),
+            "target language must be zh, en or ja"
+        );
+        if let Some(rate) = self.provider.required_rate() {
+            anyhow::ensure!(
+                self.sample_rate == rate,
+                "{} requires {} Hz mono PCM",
+                self.provider.name(),
+                rate
+            );
+        }
+        if self.provider != Provider::Mock {
+            anyhow::ensure!(
+                self.allow_cloud,
+                "cloud audio upload requires explicit opt-in"
+            );
+            self.provider.validate()?;
         }
         Ok(())
     }
@@ -96,12 +118,18 @@ pub struct Snapshot {
 struct Shared {
     stop: AtomicBool,
     events: ArrayQueue<TranscriptEvent>,
+    translations: ArrayQueue<ProviderTranslation>,
     snapshot: Mutex<Snapshot>,
     dropped: AtomicU64,
 }
 impl Shared {
     fn emit(&self, event: TranscriptEvent) {
         if self.events.force_push(event).is_some() {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    fn translate(&self, translation: ProviderTranslation) {
+        if self.translations.force_push(translation).is_some() {
             self.dropped.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -130,6 +158,7 @@ impl Recognition {
         let shared = Arc::new(Shared {
             stop: AtomicBool::new(false),
             events: ArrayQueue::new(64),
+            translations: ArrayQueue::new(64),
             snapshot: Mutex::new(Snapshot::default()),
             dropped: AtomicU64::new(0),
         });
@@ -139,7 +168,8 @@ impl Recognition {
             .spawn(move || {
                 let result = match config.provider {
                     Provider::Deepgram => cloud::run(&config, session_id, &frames, &state),
-                    _ => local::run(&config, session_id, &frames, &state),
+                    Provider::Mock => mock::run(&config, session_id, &frames, &state),
+                    _ => protocols::run(&config, session_id, &frames, &state),
                 };
                 match result {
                     Ok(()) => state.status("识别已停止", &frames, false),
@@ -154,6 +184,10 @@ impl Recognition {
     /// Poll one result without waiting.
     pub fn pop(&self) -> Option<TranscriptEvent> {
         self.shared.events.pop()
+    }
+    /// Poll one service translation without waiting.
+    pub fn pop_translation(&self) -> Option<ProviderTranslation> {
+        self.shared.translations.pop()
     }
     /// Read diagnostics without blocking the UI.
     pub fn snapshot(&self) -> Option<Snapshot> {
@@ -384,6 +418,7 @@ mod worker_tests {
         let shared = Shared {
             stop: AtomicBool::new(false),
             events: ArrayQueue::new(64),
+            translations: ArrayQueue::new(64),
             snapshot: Mutex::new(Snapshot::default()),
             dropped: AtomicU64::new(0),
         };

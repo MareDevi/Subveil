@@ -5,9 +5,6 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
-[features]
-sherpa = ["subveil-asr/sherpa"]
-
 [dependencies]
 anyhow.workspace = true
 gpui.workspace = true
