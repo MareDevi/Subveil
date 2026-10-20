@@ -1,0 +1,34 @@
+[tools]
+rust = { version = "1.99.1", components = ["rustfmt", "clippy"] }
+
+[tasks.doctor]
+description = "Check Rust and Linux native development dependencies"
+run = "bash scripts/doctor.sh"
+
+[tasks.build]
+description = "Build the native application"
+run = "cargo build --workspace --locked"
+
+[tasks.run]
+description = "Launch the native control window"
+run = "cargo run --locked -p subveil"
+
+[tasks.fmt]
+description = "Format Rust sources"
+run = "cargo fmt --all"
+
+[tasks."fmt:check"]
+description = "Check Rust formatting"
+run = "cargo fmt --all -- --check"
+
+[tasks.clippy]
+description = "Lint every workspace target without warnings"
+run = "cargo clippy --workspace --all-targets --locked -- -D warnings"
+
+[tasks.test]
+description = "Run workspace tests"
+run = "cargo test --workspace --locked"
+
+[tasks.check]
+description = "Run all M00 quality gates sequentially"
+run = ["mise run fmt:check", "mise run build", "mise run clippy", "mise run test"]

@@ -1,0 +1,7 @@
+/target/
+/.mise.local.toml
+/mise.local.toml
+*.log
+.env
+.env.*
+!.env.example
