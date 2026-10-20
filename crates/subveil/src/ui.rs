@@ -53,11 +53,16 @@ impl Render for ControlView {
                     TranslationState::Complete(text) => text.clone(),
                     TranslationState::Pending => "正在生成模拟译文…".into(),
                     TranslationState::Failed(error) => format!("模拟翻译失败：{error}"),
-                    TranslationState::NotRequested => "正在识别（模拟）…".into(),
+                    TranslationState::NotRequested => if subtitle.is_final {
+                        "原文已确定；尚未启用翻译。"
+                    } else {
+                        "正在识别…"
+                    }
+                    .into(),
                 },
             );
         } else {
-            preview = preview.child("暂无字幕；演示会在短暂静默后自动开始下一段。".to_owned());
+            preview = preview.child("暂无字幕；请选择 ASR 并播放语音，或启动离线演示。".to_owned());
         }
         let mode_label = match settings.display_mode {
             DisplayMode::Bilingual => "双语",
@@ -91,8 +96,8 @@ impl Render for ControlView {
             .bg(rgb(0x10151e))
             .text_color(rgb(0xe8edf5))
             .child(div().text_3xl().child("Subveil"))
-            .child("M02 · 系统音频采集与 Wayland 字幕浮窗")
-            .child("音频仅本机处理，不保存、不上传。字幕仍为独立模拟样本；尚无真实识别。")
+            .child("M03 · ASR Provider 与 Wayland 字幕浮窗")
+            .child("默认不上传音频。云端 ASR 仅在点击「同意上传并开始」后发送系统音频至 Deepgram。")
             .child(
                 row()
                     .child(button(
@@ -149,6 +154,14 @@ impl Render for ControlView {
                     .child(format!("RMS {:.1} dBFS · 峰值 {:.1} dBFS · {}", 20. * session.audio.rms.max(0.000001).log10(), 20. * session.audio.peak.max(0.000001).log10(), if session.audio.silent { "静音" } else { "有声" }))
                     .child(format!("PCM 块 {} · 样本 {} · 丢块 {} / 丢样本 {} · 无效块 {} · 连接 {}", session.audio.blocks, session.audio.samples, session.audio.dropped_blocks, session.audio.dropped_samples, session.audio.invalid_chunks, session.audio.connections))
             )
+            .child(div().flex().flex_col().gap_2().p_4().rounded_lg().bg(rgb(0x1b2432))
+                .child(row()
+                    .child(button("asr-provider", format!("ASR {:?} · 停止时切换", session.asr_config.provider), &self.session, Session::cycle_asr_provider))
+                    .child(button("asr-language", format!("语言 {}", session.asr_config.language), &self.session, Session::cycle_asr_language))
+                    .child(button("asr-start", if session.asr_stopping { "正在停止…" } else if session.asr_active() { "停止 ASR 与音频" } else if session.asr_config.provider == subveil_asr::Provider::Deepgram { "同意上传并开始 Deepgram ASR" } else { "开始本地 ASR / Mock" }, &self.session, Session::toggle_asr)))
+                .child("Deepgram：音频上传至 api.deepgram.com，可能产生服务费用。Mock：仅预设样本。本地 sherpa：需要模型和构建特性。")
+                .child(session.asr.status.clone())
+                .child(format!("识别重置 {} · ASR 输入丢块 {} · 结果丢事件 {}", session.asr.resets, session.asr.dropped_audio, session.asr.dropped_events)))
             .child(div().text_sm().child(session.message.clone()))
             .children(session.config_error.as_ref().map(|error| {
                 div()

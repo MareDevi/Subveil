@@ -23,6 +23,10 @@ pub struct Session {
     pub saving: bool,
     pub audio: subveil_audio::Snapshot,
     audio_capture: Option<subveil_audio::Capture>,
+    recognition: Option<subveil_asr::Recognition>,
+    pub asr_config: subveil_asr::Config,
+    pub asr: subveil_asr::Snapshot,
+    pub asr_stopping: bool,
     pub audio_stopping: bool,
     overlay: Option<WindowHandle<OverlayView>>,
     overlay_requested: bool,
@@ -55,12 +59,19 @@ impl Session {
             subtitles: SubtitleState::new(1, settings.history_limit, settings.ttl_ms),
             settings,
             running: false,
-            message: "准备就绪；点击开始演示。样式只在点击保存时写入。".into(),
+            message: "准备就绪；选择 ASR 或开始离线演示。样式只在点击保存时写入。".into(),
             config_error,
             config_path,
             saving: false,
             audio: subveil_audio::Snapshot::default(),
             audio_capture: None,
+            recognition: None,
+            asr_config: subveil_asr::Config::default(),
+            asr: subveil_asr::Snapshot {
+                status: "尚未启动识别".into(),
+                ..Default::default()
+            },
+            asr_stopping: false,
             audio_stopping: false,
             overlay: None,
             overlay_requested: false,
@@ -91,6 +102,33 @@ impl Session {
                 changed = true;
             }
         }
+        if let Some(recognition) = &self.recognition {
+            if let Some(snapshot) = recognition.snapshot() {
+                self.asr = snapshot;
+                changed = true;
+            }
+            // Results remain bounded; stopped sessions never apply late events.
+            for _ in 0..64 {
+                let Some(event) = recognition.pop() else {
+                    break;
+                };
+                if !self.asr_stopping {
+                    changed |= self.subtitles.apply(event, now_ms);
+                }
+            }
+            if recognition.is_finished() {
+                if !self.asr_stopping && !self.asr.status.starts_with("识别失败") {
+                    self.asr.status = "识别线程意外退出；请检查后重启 ASR".into();
+                }
+                if let Some(capture) = &self.audio_capture {
+                    capture.stop();
+                    self.audio_stopping = true;
+                }
+                self.recognition = None;
+                self.asr_stopping = false;
+                changed = true;
+            }
+        }
         if self.running && now >= self.next_tick {
             changed |= mock::advance(&mut self.subtitles, self.tick, now_ms);
             self.tick = self.tick.saturating_add(1);
@@ -102,7 +140,7 @@ impl Session {
     }
 
     pub fn start(&mut self, cx: &mut Context<Self>) {
-        if self.running {
+        if self.running || self.recognition.is_some() {
             return;
         }
         self.subtitles
@@ -118,9 +156,17 @@ impl Session {
 
     pub fn stop(&mut self, cx: &mut Context<Self>) {
         self.running = false;
+        if let Some(recognition) = &self.recognition {
+            recognition.stop();
+            self.asr_stopping = true;
+            if let Some(capture) = &self.audio_capture {
+                capture.stop();
+                self.audio_stopping = true;
+            }
+        }
         self.subtitles
             .reset(self.subtitles.session_id().saturating_add(1));
-        self.message = "演示已停止，字幕已清空。".into();
+        self.message = "字幕会话已停止，字幕已清空。".into();
         cx.notify();
     }
 
@@ -129,6 +175,10 @@ impl Session {
     }
 
     pub fn toggle_audio(&mut self, cx: &mut Context<Self>) {
+        if self.recognition.is_some() {
+            self.stop(cx);
+            return;
+        }
         if let Some(capture) = &self.audio_capture {
             capture.stop();
             self.audio_stopping = true;
@@ -158,6 +208,77 @@ impl Session {
             };
             cx.notify();
         }
+    }
+
+    pub fn asr_active(&self) -> bool {
+        self.recognition.is_some()
+    }
+
+    pub fn cycle_asr_provider(&mut self, cx: &mut Context<Self>) {
+        if self.recognition.is_none() {
+            self.asr_config.provider = match self.asr_config.provider {
+                subveil_asr::Provider::Mock => subveil_asr::Provider::Deepgram,
+                subveil_asr::Provider::Deepgram => subveil_asr::Provider::Sherpa,
+                subveil_asr::Provider::Sherpa => subveil_asr::Provider::Mock,
+            };
+            cx.notify();
+        }
+    }
+
+    pub fn cycle_asr_language(&mut self, cx: &mut Context<Self>) {
+        if self.recognition.is_none() {
+            self.asr_config.language = if self.asr_config.language == "en" {
+                "ja"
+            } else {
+                "en"
+            }
+            .into();
+            cx.notify();
+        }
+    }
+
+    pub fn toggle_asr(&mut self, cx: &mut Context<Self>) {
+        if self.recognition.is_some() {
+            self.stop(cx);
+            return;
+        }
+        if self.audio_capture.is_some() {
+            self.message = "请先停止独立音频采集，等待停止完成，再启动 ASR。".into();
+            cx.notify();
+            return;
+        }
+        let mut config = self.asr_config.clone();
+        config.sample_rate = self.audio.sample_rate;
+        config.allow_cloud = config.provider == subveil_asr::Provider::Deepgram;
+        let result = (|| -> anyhow::Result<_> {
+            config.validate()?;
+            let (capture, frames) = subveil_audio::Capture::start_with_frames(config.sample_rate)?;
+            let id = self.subtitles.session_id().saturating_add(1);
+            let recognition = subveil_asr::Recognition::start(config, id, frames)?;
+            Ok((capture, recognition, id))
+        })();
+        match result {
+            Ok((capture, recognition, id)) => {
+                self.running = false;
+                self.subtitles.reset(id);
+                self.started = Instant::now();
+                self.audio_capture = Some(capture);
+                self.recognition = Some(recognition);
+                self.asr_stopping = false;
+                self.audio_stopping = false;
+                self.message = if self.asr_config.provider == subveil_asr::Provider::Deepgram {
+                    "云端 ASR 已选择：系统音频上传至 Deepgram；点击停止可撤销本次上传。"
+                } else if self.asr_config.provider == subveil_asr::Provider::Mock {
+                    "Mock ASR 仅按音频能量输出预设样本，不是真实识别。"
+                } else {
+                    "本地 streaming ASR 已启动；音频不上传，语言能力取决于模型。"
+                }
+                .into();
+                self.show_overlay(cx);
+            }
+            Err(error) => self.message = format!("无法启动 ASR：{error}"),
+        }
+        cx.notify();
     }
 
     pub fn overlay_visible(&self) -> bool {
@@ -301,7 +422,11 @@ impl Session {
     pub fn window_closed(&mut self, id: WindowId, cx: &mut Context<Self>) {
         if self.control.is_some_and(|handle| handle.window_id() == id) {
             self.control = None;
-            if self.running || self.overlay_requested || self.audio_capture.is_some() {
+            if self.running
+                || self.overlay_requested
+                || self.audio_capture.is_some()
+                || self.recognition.is_some()
+            {
                 let session = cx.entity();
                 cx.defer(move |cx| match ui::open_recovery(session.clone(), cx) {
                     Ok(handle) => session.update(cx, |session, _| session.recovery = Some(handle)),

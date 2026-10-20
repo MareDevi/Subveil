@@ -66,7 +66,7 @@ impl Render for OverlayView {
                     if subtitle.is_final {
                         ""
                     } else {
-                        "正在识别（模拟）…"
+                        "正在识别…"
                     }
                 }
             };
