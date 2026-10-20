@@ -2,6 +2,8 @@
 #![deny(missing_docs)]
 
 mod cloud;
+mod local;
+pub use local::{ModelMetadata, model_metadata};
 mod mock;
 mod protocols;
 mod providers;
@@ -39,6 +41,8 @@ pub struct ProviderTranslation {
 pub struct Config {
     /// Chosen backend.
     pub provider: Provider,
+    /// User-selected streaming model manifest; never downloaded automatically.
+    pub local_model: Option<std::path::PathBuf>,
     /// Source language hint: en or ja; automatic providers ignore this hint.
     pub language: String,
     /// Target language for services that return translations.
@@ -54,6 +58,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             provider: Provider::Mock,
+            local_model: None,
             language: "en".into(),
             target_language: "zh".into(),
             sample_rate: 16_000,
@@ -92,7 +97,10 @@ impl Config {
                 rate
             );
         }
-        if self.provider != Provider::Mock {
+        if self.provider == Provider::Local {
+            anyhow::ensure!(self.local_model.is_some(), "请导入本地模型清单");
+        }
+        if self.provider.is_cloud() {
             anyhow::ensure!(
                 self.allow_cloud,
                 "cloud audio upload requires explicit opt-in"
@@ -168,9 +176,14 @@ impl Recognition {
             .spawn(move || {
                 let result = match config.provider {
                     Provider::Deepgram => cloud::run(&config, session_id, &frames, &state),
+                    Provider::Local => local::run(&config, session_id, &frames, &state),
                     Provider::Mock => mock::run(&config, session_id, &frames, &state),
                     _ => protocols::run(&config, session_id, &frames, &state),
                 };
+                if state.stopped() {
+                    state.status("识别已停止", &frames, false);
+                    return;
+                }
                 match result {
                     Ok(()) => state.status("识别已停止", &frames, false),
                     Err(error) => state.status(format!("识别失败：{error}"), &frames, false),

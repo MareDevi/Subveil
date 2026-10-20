@@ -2,7 +2,7 @@
 
 Rust + GPUI 原生跨平台实时字幕翻译应用，优先支持 Linux / Wayland / PipeWire。
 
-当前开发 **M03：云端语音服务**：支持音频驱动 Mock、Deepgram，以及阿里云、Google Gemini、火山引擎、腾讯云、百度、OpenAI、Azure OpenAI、xAI 与两种自定义实时识别协议。可显示接口自带原文和译文，不另外调用文字翻译服务。默认不上传、不保存音频；云端须点击明确标注上传的启动按钮。真实云服务的英语、日语验收仍待凭据。本地模型移到 M04，当前不包含模型运行库。
+当前开发 **M04：本地 ASR 与实时翻译**。支持导入 sherpa-onnx streaming transducer 模型、本地 CPU 识别，以及独立 OpenAI-compatible / DeepL 文字翻译。保留 M03 云端服务及接口自带译文。默认不上传音频或文本；两种上传分别授权。真实云服务与本地模型的日语/英语质量验收仍待模型和凭据。配置见 [本地 ASR 与文字翻译](docs/local-asr-and-translation.md)。
 
 ## 开发环境
 
@@ -61,7 +61,7 @@ mise run audio:probe -- 60 24000
 
 服务凭据分别从环境变量读取，不持久化密钥。接口自带译文可随原文修订，迟到的旧 revision 不会覆盖新字幕。OpenAI、Azure、Google 以有界连续窗口展示，不伪造逐句 Final；其他协议使用服务本身的句段标识。服务生成的音频不播放、不保存。
 
-完整服务清单、环境变量、模型与部署要求、协议差异见 [云语音服务配置](docs/cloud-services.md)。本地 ASR、模型加载和导入留到 M04；当前已移除本地后端实现与构建特性。
+完整服务清单、环境变量、模型与部署要求、协议差异见 [云语音服务配置](docs/cloud-services.md)。本地 ASR、模型清单与独立文字翻译见 [M04 配置](docs/local-asr-and-translation.md)。
 
 ```sh
 mise run asr:probe -- mock 3 ja 16000
@@ -71,7 +71,7 @@ mise run asr:probe -- openai 10 ja 24000 --allow-upload
 mise run asr:check
 ```
 
-诊断默认不输出识别文本，单次最多 60 秒；只有显式 `--print-transcripts` 才打印原文和译文。`asr:check` 检查所有 ASR 目标，不再链接本地模型运行库。配置和协议测试通过不等于真实服务质量、权限或费用验收通过。
+诊断默认不输出识别文本，单次最多 60 秒；只有显式 `--print-transcripts` 才打印原文和译文。`asr:check` 检查所有 ASR 目标，并链接本地模型运行库。配置和协议测试通过不等于真实服务质量、权限或费用验收通过。
 
 ## 字幕样式
 
@@ -108,7 +108,7 @@ M01 使用屏幕布局中最左、其次最上方的输出，宽度与高度按�
 
 ## 工程与文档
 
-Workspace 包含 `subveil` 应用、`subveil-core` 核心状态、`subveil-audio` 音频适配器与 `subveil-asr` 识别后端。核心状态和配置不依赖 GPUI，设备与付费 API 均不参与核心测试。GUI 统一依赖 GPUI Kit 0.8.0，通过 facade 使用 gpui-component 0.8.0 与 gpui-pre 0.3.9，保持一致的类型。
+Workspace 包含 `subveil` 应用、`subveil-core` 核心状态、`subveil-audio` 音频适配器、`subveil-asr` 识别后端与 `subveil-translate` 文字翻译后端。核心状态和配置不依赖 GPUI，设备与付费 API 均不参与核心测试。GUI 统一依赖 GPUI Kit 0.8.0，通过 facade 使用 gpui-component 0.8.0 与 gpui-pre 0.3.9，保持一致的类型。
 
 - [开发规范](AGENTS.md)
 - [完整开发规划](docs/development-plan.md)
@@ -120,5 +120,8 @@ Workspace 包含 `subveil` 应用、`subveil-core` 核心状态、`subveil-audio
 - [M02 验收记录](docs/m02-validation.md)
 - [M03 实施计划](docs/m03-plan.md)
 - [M03 验收记录](docs/m03-validation.md)
+- [M04 实施计划](docs/m04-plan.md)
+- [M04 配置](docs/local-asr-and-translation.md)
+- [M04 验收记录](docs/m04-validation.md)
 
 必须使用 Conventional Commits，按可审查的小步勤提交。项目许可证待所有者确认，尚未授予开源许可证。

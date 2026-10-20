@@ -48,3 +48,7 @@ run = "timeout 90s cargo test --workspace --locked"
 [tasks.check]
 description = "Run all quality gates sequentially"
 run = ["mise run fmt:check", "mise run build", "mise run clippy", "mise run test"]
+
+[tasks."asr:local-wav"]
+description = "Validate an explicitly imported streaming model against a local WAV"
+run = "timeout 90s cargo run --locked -p subveil-asr --example local_wav_probe --"

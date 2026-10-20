@@ -294,24 +294,25 @@ impl ControlView {
         let provider = session.asr_config.provider;
         let busy = session.asr_active() || session.asr_stopping;
         column()
-            .child(heading("语音服务", "选择系统音频的识别服务；译文仅来自语音接口。", cx))
+            .child(heading("语音服务", "选择识别服务与文字翻译；本地识别不上传音频。", cx))
             .child(field("识别服务", Select::new(&self.provider).disabled(busy)
                 .accessibility_label("识别服务").w_full(), cx))
             .child(field("语言", row()
                 .child(button("asr-language", format!("源语种：{}", if provider.automatic_language() { "自动识别" } else { &session.asr_config.language }), &self.session, Session::cycle_asr_language)
-                    .disabled(busy || provider.automatic_language()))
+                    .disabled(busy || provider.automatic_language() || provider == subveil_asr::Provider::Local))
                 .child(button("asr-target", format!("目标语种：{}", session.asr_config.target_language), &self.session, Session::cycle_target_language)
-                    .disabled(busy || !provider.translates())), cx))
+                    .disabled(busy)), cx))
             .child(column().gap_2()
-                .child(div().text_base().child(if provider == subveil_asr::Provider::Mock { "Mock ASR · 不上传音频" } else { "开始后将上传系统音频" }))
+                .child(div().text_base().child(if !provider.is_cloud() { "本地处理 · 不上传音频" } else { "开始后将上传系统音频" }))
                 .child(help(format!("音频目标：{}", provider.destination()), cx))
                 .child(help(if provider.translates() { "显示服务自带译文；不播放返回语音。" } else { "此服务仅输出原文。" }, cx))
                 .child(help(if provider == subveil_asr::Provider::Mock {
                     "Mock ASR 会采集本机系统音频，按音频能量输出预设样本。"
-                } else { "仅点击下方同意按钮才开始上传。云服务可能收费；请先通过环境变量配置服务凭据。" }, cx)))
+                } else if provider == subveil_asr::Provider::Local { "导入模型后开始识别；文件校验与推理均在本机执行。" } else { "仅点击下方同意按钮才开始上传。云服务可能收费；请先通过环境变量配置服务凭据。" }, cx)))
             .child(row().child(button("asr-start", if session.asr_stopping { "正在停止…" }
                 else if session.asr_active() { "停止识别与音频" }
                 else if provider == subveil_asr::Provider::Mock { "开始 Mock ASR" }
+                else if provider == subveil_asr::Provider::Local { "开始本地识别" }
                 else { "同意上传并开始" }, &self.session, Session::toggle_asr)
                 .disabled(session.asr_stopping || (!session.asr_active() && (session.audio_active() || session.audio_stopping)))
                 .loading(session.asr_stopping)))
@@ -319,6 +320,16 @@ impl ControlView {
                 "独立采集正在运行。请在「运行诊断」停止采集，再开始识别。"
             } else { "切换服务与语言前，请先停止识别。" }, cx))
             .child(div().text_sm().child(session.asr.status.clone()))
+            .when(provider == subveil_asr::Provider::Local, |view| view
+                .child(button("import-model", "导入模型清单…", &self.session, Session::import_model).disabled(busy || session.importing_model).loading(session.importing_model))
+                .child(help(session.model_info.clone(), cx)))
+            .child(field("文字翻译", button("translation-provider", format!("翻译服务：{}", session.translation_provider.name()), &self.session, Session::cycle_translation).disabled(busy || provider.translates()), cx))
+            .child(help(if provider.translates() { "此语音服务自带译文，不再调用独立文字翻译。" } else { "仅翻译已确定的句子。云端文字翻译可能收费，需独立授权上传原文与最多三句上下文。" }, cx))
+            .child(help(format!("文本上传目标：{}", session.translation_provider.destination()), cx))
+            .child(button("consent-text", if session.allow_text_upload { "撤销文本上传授权" } else { "同意本次会话上传文本" }, &self.session, Session::consent_text_upload)
+                .disabled(busy || provider.translates() || session.translation_provider == subveil_translate::Provider::Disabled))
+            .child(help(session.translation_status.clone(), cx))
+            .child(help(format!("翻译队列丢弃：{}", session.translation_dropped), cx))
     }
 
     fn render_appearance(&self, cx: &App) -> gpui_kit::Div {

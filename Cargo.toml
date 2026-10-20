@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/subveil", "crates/subveil-core", "crates/subveil-audio", "crates/subveil-asr"]
+members = ["crates/subveil", "crates/subveil-core", "crates/subveil-audio", "crates/subveil-asr", "crates/subveil-translate"]
 resolver = "3"
 
 [workspace.package]

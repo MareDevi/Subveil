@@ -27,6 +27,14 @@ pub struct Session {
     pub asr_config: subveil_asr::Config,
     pub asr: subveil_asr::Snapshot,
     pub asr_stopping: bool,
+    translation: Option<subveil_translate::Translation>,
+    pub translation_provider: subveil_translate::Provider,
+    pub allow_text_upload: bool,
+    pub translation_status: String,
+    pub translation_dropped: u64,
+    pub model_info: String,
+    local_language: Option<String>,
+    pub importing_model: bool,
     pub audio_stopping: bool,
     overlay: Option<WindowHandle<OverlayView>>,
     overlay_requested: bool,
@@ -72,6 +80,14 @@ impl Session {
                 ..Default::default()
             },
             asr_stopping: false,
+            translation: None,
+            translation_provider: subveil_translate::Provider::Disabled,
+            allow_text_upload: false,
+            translation_status: "文字翻译已关闭".into(),
+            translation_dropped: 0,
+            model_info: "尚未导入模型清单".into(),
+            local_language: None,
+            importing_model: false,
             audio_stopping: false,
             overlay: None,
             overlay_requested: false,
@@ -113,7 +129,24 @@ impl Session {
                     break;
                 };
                 if !self.asr_stopping {
-                    changed |= self.subtitles.apply(event, now_ms);
+                    let final_segment = match &event {
+                        subveil_core::subtitle::TranscriptEvent::Final(segment) => {
+                            Some(segment.clone())
+                        }
+                        _ => None,
+                    };
+                    if self.subtitles.apply(event, now_ms) {
+                        changed = true;
+                        if let (Some(segment), Some(translation)) =
+                            (final_segment, &self.translation)
+                            && self.subtitles.request_translation(segment.key)
+                        {
+                            translation.submit(subveil_translate::Request::new(
+                                segment,
+                                self.asr_config.target_language.clone(),
+                            ));
+                        }
+                    }
                 }
             }
             for _ in 0..64 {
@@ -138,8 +171,28 @@ impl Session {
                     self.audio_stopping = true;
                 }
                 self.recognition = None;
+                self.translation = None;
+                self.allow_text_upload = false;
                 self.asr_stopping = false;
                 changed = true;
+            }
+        }
+        if let Some(translation) = &self.translation {
+            let dropped = translation.dropped();
+            changed |= self.translation_dropped != dropped;
+            self.translation_dropped = dropped;
+            for _ in 0..64 {
+                let Some(response) = translation.pop() else {
+                    break;
+                };
+                if !self.asr_stopping {
+                    if let Err(error) = &response.result {
+                        self.translation_status = error.clone();
+                    }
+                    changed |=
+                        self.subtitles
+                            .finish_translation(response.key, response.result, now_ms);
+                }
             }
         }
         if self.running && now >= self.next_tick {
@@ -169,6 +222,9 @@ impl Session {
 
     pub fn stop(&mut self, cx: &mut Context<Self>) {
         self.running = false;
+        self.translation = None;
+        self.allow_text_upload = false;
+        self.translation_status = "文字翻译已停止；文本上传授权已撤销".into();
         if let Some(recognition) = &self.recognition {
             recognition.stop();
             self.asr_stopping = true;
@@ -230,6 +286,12 @@ impl Session {
     pub fn select_asr_provider(&mut self, provider: subveil_asr::Provider, cx: &mut Context<Self>) {
         if self.recognition.is_none() {
             self.asr_config.provider = provider;
+            if provider == subveil_asr::Provider::Local {
+                self.audio.sample_rate = self.asr_config.sample_rate;
+                if let Some(language) = &self.local_language {
+                    self.asr_config.language.clone_from(language);
+                }
+            }
             if self.audio_capture.is_none()
                 && let Some(rate) = provider.required_rate()
             {
@@ -274,20 +336,50 @@ impl Session {
             return;
         }
         let mut config = self.asr_config.clone();
-        config.sample_rate = config
-            .provider
-            .required_rate()
-            .unwrap_or(self.audio.sample_rate);
-        config.allow_cloud = config.provider != subveil_asr::Provider::Mock;
+        config.sample_rate = if config.provider == subveil_asr::Provider::Local {
+            config.sample_rate
+        } else {
+            config
+                .provider
+                .required_rate()
+                .unwrap_or(self.audio.sample_rate)
+        };
+        config.allow_cloud = config.provider.is_cloud();
         let result = (|| -> anyhow::Result<_> {
             config.validate()?;
-            let (capture, frames) = subveil_audio::Capture::start_with_frames(config.sample_rate)?;
             let id = self.subtitles.session_id().saturating_add(1);
+            let translation = if self.translation_provider != subveil_translate::Provider::Disabled
+                && !config.provider.translates()
+            {
+                match subveil_translate::HttpTranslator::from_env(
+                    self.translation_provider,
+                    self.allow_text_upload,
+                )
+                .and_then(|backend| {
+                    self.translation_status = format!(
+                        "文字翻译：{} · {}",
+                        self.translation_provider.name(),
+                        backend.destination()
+                    );
+                    subveil_translate::Translation::start(backend, id)
+                }) {
+                    Ok(worker) => Some(worker),
+                    Err(error) => {
+                        self.translation_status = format!("文字翻译未启动：{error}；ASR 继续运行");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            let (capture, frames) = subveil_audio::Capture::start_with_frames(config.sample_rate)?;
             let recognition = subveil_asr::Recognition::start(config, id, frames)?;
-            Ok((capture, recognition, id))
+            Ok((capture, recognition, translation, id))
         })();
         match result {
-            Ok((capture, recognition, id)) => {
+            Ok((capture, recognition, translation, id)) => {
+                self.translation = translation;
+                self.translation_dropped = 0;
                 self.running = false;
                 self.subtitles.reset(id);
                 self.started = Instant::now();
@@ -297,6 +389,8 @@ impl Session {
                 self.audio_stopping = false;
                 self.message = if self.asr_config.provider == subveil_asr::Provider::Mock {
                     "Mock ASR 仅按音频能量输出预设样本，不是真实识别。".into()
+                } else if self.asr_config.provider == subveil_asr::Provider::Local {
+                    "本地 streaming ASR 已启动；后台校验并加载模型，不上传音频。".into()
                 } else {
                     format!(
                         "{} 已启动：系统音频发送至 {}；点击停止撤销本次上传。{}",
@@ -314,6 +408,73 @@ impl Session {
             Err(error) => self.message = format!("无法启动 ASR：{error}"),
         }
         cx.notify();
+    }
+
+    pub fn cycle_translation(&mut self, cx: &mut Context<Self>) {
+        if self.asr_active() {
+            return;
+        }
+        self.translation_provider = match self.translation_provider {
+            subveil_translate::Provider::Disabled => subveil_translate::Provider::OpenAi,
+            subveil_translate::Provider::OpenAi => subveil_translate::Provider::DeepL,
+            subveil_translate::Provider::DeepL => subveil_translate::Provider::Disabled,
+        };
+        self.allow_text_upload = false;
+        self.translation_status = "切换服务后需要重新授权文本上传".into();
+        cx.notify();
+    }
+
+    pub fn consent_text_upload(&mut self, cx: &mut Context<Self>) {
+        if !self.asr_active() {
+            self.allow_text_upload = !self.allow_text_upload;
+            self.translation_status = if self.allow_text_upload {
+                "已授权本次会话；开始识别后才发送文本"
+            } else {
+                "文本上传授权已撤销"
+            }
+            .into();
+            cx.notify();
+        }
+    }
+
+    pub fn import_model(&mut self, cx: &mut Context<Self>) {
+        if self.asr_active() || self.importing_model {
+            return;
+        }
+        let picker = cx.prompt_for_paths(gpui_kit::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("导入 streaming 模型 TOML 清单".into()),
+        });
+        self.importing_model = true;
+        cx.notify();
+        cx.spawn(async move |session, cx| {
+            let result: anyhow::Result<_> = async {
+                let paths = picker.await??;
+                let Some(path) = paths.and_then(|paths| paths.into_iter().next()) else { return Ok(None); };
+                cx.background_executor().spawn(async move {
+                    let metadata = subveil_asr::model_metadata(&path)?;
+                    Ok(Some((path, metadata)))
+                }).await
+            }.await;
+            let _ = session.update(cx, |session, cx| {
+                session.importing_model = false;
+                match result {
+                    Ok(Some((path, metadata))) if !session.asr_active() => {
+                        session.model_info = format!("{} · {} Hz · {}\n来源：{}\n许可证：{}\n启动后校验文件与 SHA-256 并加载模型", path.display(), metadata.sample_rate, metadata.language, metadata.source, metadata.license);
+                        session.asr_config.local_model = Some(path);
+                        session.asr_config.sample_rate = metadata.sample_rate;
+                        session.local_language = Some(metadata.language.clone());
+                        session.asr_config.language = metadata.language;
+                        session.audio.sample_rate = metadata.sample_rate;
+                    }
+                    Ok(_) => {}
+                    Err(error) => session.model_info = format!("无法导入模型：{error}"),
+                }
+                cx.notify();
+            });
+        }).detach();
     }
 
     pub fn overlay_visible(&self) -> bool {

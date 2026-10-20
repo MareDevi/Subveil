@@ -12,7 +12,7 @@ fn main() -> anyhow::Result<()> {
         (1..=6).contains(&args.len()),
         "usage: asr_probe PROVIDER [SECONDS] [en|ja] [RATE] [--allow-upload] [--print-transcripts]"
     );
-    let provider = Provider::ALL.into_iter().find(|p| p.id() == args[0]).context("未知 Provider；可用 mock/deepgram/alibaba/gemini/volcano/tencent/baidu/openai/azure-openai/xai/custom-dashscope/custom-openai")?;
+    let provider = Provider::ALL.into_iter().find(|p| p.id() == args[0]).context("未知 Provider；可用 mock/local/deepgram/alibaba/gemini/volcano/tencent/baidu/openai/azure-openai/xai/custom-dashscope/custom-openai")?;
     let positional: Vec<_> = args[1..].iter().filter(|a| !a.starts_with("--")).collect();
     ensure!(
         positional.len() <= 3
@@ -39,6 +39,7 @@ fn main() -> anyhow::Result<()> {
             .map(|s| s.parse::<u32>())
             .transpose()?
             .unwrap_or(provider.required_rate().unwrap_or(16_000)),
+        local_model: std::env::var_os("SUBVEIL_LOCAL_MODEL").map(Into::into),
         allow_cloud: args.iter().any(|s| s == "--allow-upload"),
         ..Default::default()
     };
@@ -48,7 +49,7 @@ fn main() -> anyhow::Result<()> {
         provider,
         config.sample_rate,
         config.language,
-        config.allow_cloud && provider != Provider::Mock
+        config.allow_cloud && provider.is_cloud()
     );
     let (capture, frames) = subveil_audio::Capture::start_with_frames(config.sample_rate)?;
     let worker = Recognition::start(config, 1, frames)?;

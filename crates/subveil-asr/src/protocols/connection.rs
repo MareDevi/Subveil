@@ -365,7 +365,7 @@ mod initialization_tests {
     fn every_cloud_initializer_builds_without_devices_real_keys_or_network() -> anyhow::Result<()> {
         for provider in Provider::ALL
             .into_iter()
-            .filter(|p| !matches!(p, Provider::Mock | Provider::Deepgram))
+            .filter(|p| !matches!(p, Provider::Mock | Provider::Local | Provider::Deepgram))
         {
             let config = Config {
                 provider,

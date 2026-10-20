@@ -1,11 +1,13 @@
 //! Cloud service catalog and credential-free capability descriptions.
 use anyhow::{Context as _, ensure};
 
-/// Supported live speech services. Local model execution belongs to M04.
+/// Supported local and cloud speech services.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Provider {
     /// Deterministic offline sample text driven by audio energy.
     Mock,
+    /// User-imported sherpa-onnx streaming transducer.
+    Local,
     /// Deepgram Listen v1 transcription.
     Deepgram,
     /// Alibaba Cloud LiveTranslate.
@@ -31,8 +33,9 @@ pub enum Provider {
 }
 impl Provider {
     /// Ordered catalog used by both GUI and headless diagnostics.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::Mock,
+        Self::Local,
         Self::Deepgram,
         Self::Alibaba,
         Self::Gemini,
@@ -45,10 +48,15 @@ impl Provider {
         Self::CustomDashScope,
         Self::CustomOpenAi,
     ];
+    /// Whether audio leaves this computer.
+    pub fn is_cloud(self) -> bool {
+        !matches!(self, Self::Mock | Self::Local)
+    }
     /// Stable command-line identifier.
     pub fn id(self) -> &'static str {
         match self {
             Self::Mock => "mock",
+            Self::Local => "local",
             Self::Deepgram => "deepgram",
             Self::Alibaba => "alibaba",
             Self::Gemini => "gemini",
@@ -66,6 +74,7 @@ impl Provider {
     pub fn name(self) -> &'static str {
         match self {
             Self::Mock => "Mock",
+            Self::Local => "本地 sherpa-onnx",
             Self::Deepgram => "Deepgram",
             Self::Alibaba => "阿里云 LiveTranslate",
             Self::Gemini => "Google Gemini",
@@ -82,7 +91,7 @@ impl Provider {
     /// Fixed input rate required by this integration, if any.
     pub fn required_rate(self) -> Option<u32> {
         match self {
-            Self::Mock | Self::Deepgram => None,
+            Self::Mock | Self::Local | Self::Deepgram => None,
             Self::OpenAi | Self::AzureOpenAi | Self::Xai | Self::CustomOpenAi => Some(24_000),
             _ => Some(16_000),
         }
@@ -91,7 +100,7 @@ impl Provider {
     pub fn translates(self) -> bool {
         !matches!(
             self,
-            Self::Mock | Self::Deepgram | Self::CustomDashScope | Self::CustomOpenAi
+            Self::Mock | Self::Local | Self::Deepgram | Self::CustomDashScope | Self::CustomOpenAi
         )
     }
     /// Whether the service automatically detects the source language.
@@ -105,6 +114,7 @@ impl Provider {
     pub fn destination(self) -> String {
         match self {
             Self::Mock => "本机 Mock（不上传）".into(),
+            Self::Local => "本机 CPU（不上传）".into(),
             Self::Deepgram => "api.deepgram.com".into(),
             Self::Alibaba => "北京百炼业务空间".into(),
             Self::Gemini => "generativelanguage.googleapis.com".into(),
@@ -125,7 +135,7 @@ impl Provider {
     }
     pub(crate) fn validate(self) -> anyhow::Result<()> {
         let names: &[&str] = match self {
-            Self::Mock => &[],
+            Self::Mock | Self::Local => &[],
             Self::Deepgram => &["DEEPGRAM_API_KEY"],
             Self::Alibaba => &["DASHSCOPE_API_KEY", "DASHSCOPE_WORKSPACE_ID"],
             Self::Gemini => &["GEMINI_API_KEY"],
@@ -256,8 +266,8 @@ mod tests {
         }
     }
     #[test]
-    fn catalog_has_unique_ids_and_no_local_model_backend() {
+    fn catalog_has_unique_ids() {
         let ids: std::collections::HashSet<_> = Provider::ALL.iter().map(|p| p.id()).collect();
-        assert_eq!(ids.len(), 12);
+        assert_eq!(ids.len(), 13);
     }
 }

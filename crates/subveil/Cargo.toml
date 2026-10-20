@@ -14,5 +14,7 @@ subveil-core.workspace = true
 subveil-asr = { path = "../subveil-asr" }
 subveil-audio = { path = "../subveil-audio" }
 
+subveil-translate = { path = "../subveil-translate" }
+
 [lints]
 workspace = true

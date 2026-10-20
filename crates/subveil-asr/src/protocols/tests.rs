@@ -179,10 +179,12 @@ fn late_translation_with_unknown_link_is_not_assigned_to_latest_speech() -> anyh
 }
 #[test]
 fn service_errors_never_echo_payloads() -> anyhow::Result<()> {
-    for provider in Provider::ALL
-        .into_iter()
-        .filter(|p| !matches!(p, Provider::Mock | Provider::Deepgram | Provider::Volcano))
-    {
+    for provider in Provider::ALL.into_iter().filter(|p| {
+        !matches!(
+            p,
+            Provider::Mock | Provider::Local | Provider::Deepgram | Provider::Volcano
+        )
+    }) {
         let config = Config {
             provider,
             ..Default::default()

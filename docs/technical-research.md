@@ -124,3 +124,8 @@ DeepL POST /v2/translate 使用 DeepL-Auth-Key、text 数组、target_lang、可
 - https://developers.deepl.com/api-reference/translate
 - https://developers.deepl.com/docs/learning-how-tos/examples-and-guides/how-to-use-context-parameter
 - https://github.com/openai/openai-openapi
+
+M04 运行验证补充：reqwest 锁定 0.13.5，使用 rustls-no-provider 与现有 ring，显式初始化进程级提供者，避免 aws-lc / ring 混用。公开英文测试模型为 csukuangfj/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17，模型卡声明 Apache-2.0。下载至 /tmp 的 ONNX 通过发布方 LFS SHA-256，其他文件通过发布方 Git blob ID 校验；不提交模型或音频。日语官方 ReazonSpeech Zipformer 属于 offline 模型，不能用于当前 streaming transducer 后端；当前未选定并验证日语 streaming 模型。
+
+- https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/blob/main/README.md
+- https://k2-fsa.github.io/sherpa/onnx/pretrained_models/offline-transducer/zipformer-transducer-models.html
