@@ -1,7 +1,8 @@
-//! User-imported, integrity-checked streaming transducer models.
+//! Integrity-checked streaming transducers and explicitly segmented offline models.
+mod offline;
 use crate::{Config, Continuity, Shared, Transcript};
 use anyhow::{Context as _, ensure};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     io::Read,
@@ -10,6 +11,26 @@ use std::{
     time::{Duration, Instant},
 };
 use subveil_audio::FrameReceiver;
+
+/// Recognition semantics; offline models never claim incremental streaming output.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelKind {
+    /// Stateful online transducer emitting real Partial and Final revisions.
+    #[default]
+    StreamingTransducer,
+    /// SenseVoice called on completed, bounded VAD segments; Final only.
+    SenseVoice,
+}
+impl ModelKind {
+    /// User-facing distinction between real streaming and segmented offline inference.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::StreamingTransducer => "Streaming · 增量识别",
+            Self::SenseVoice => "离线分段 · 句末识别",
+        }
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -20,13 +41,18 @@ struct Artifact {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Manifest {
+    #[serde(default)]
+    kind: ModelKind,
     language: String,
+    #[serde(default)]
+    languages: Vec<String>,
     sample_rate: u32,
     source: String,
     license: String,
-    encoder: Artifact,
-    decoder: Artifact,
-    joiner: Artifact,
+    encoder: Option<Artifact>,
+    decoder: Option<Artifact>,
+    joiner: Option<Artifact>,
+    model: Option<Artifact>,
     tokens: Artifact,
 }
 impl Manifest {
@@ -35,12 +61,37 @@ impl Manifest {
             std::fs::metadata(path)?.is_file() && std::fs::metadata(path)?.len() <= 65_536,
             "模型清单超过 64 KiB"
         );
-        let manifest: Self =
+        let mut manifest: Self =
             toml::from_str(&std::fs::read_to_string(path)?).context("模型清单 TOML 无效")?;
+        if manifest.languages.is_empty() {
+            manifest.languages.push(manifest.language.clone());
+        }
         ensure!(
-            matches!(manifest.language.as_str(), "en" | "ja"),
-            "模型语言必须为 en 或 ja"
+            manifest.languages.len() <= 3
+                && manifest
+                    .languages
+                    .iter()
+                    .all(|lang| matches!(lang.as_str(), "en" | "ja" | "zh"))
+                && manifest.languages.contains(&manifest.language),
+            "模型语种必须来自 en / ja / zh"
         );
+        match manifest.kind {
+            ModelKind::StreamingTransducer => ensure!(
+                manifest.encoder.is_some()
+                    && manifest.decoder.is_some()
+                    && manifest.joiner.is_some()
+                    && manifest.model.is_none(),
+                "Streaming 模型缺少 encoder / decoder / joiner"
+            ),
+            ModelKind::SenseVoice => ensure!(
+                manifest.model.is_some()
+                    && manifest.encoder.is_none()
+                    && manifest.decoder.is_none()
+                    && manifest.joiner.is_none()
+                    && manifest.sample_rate == 16000,
+                "SenseVoice 需要 16 kHz 模型与 tokens"
+            ),
+        }
         ensure!(
             (8_000..=48_000).contains(&manifest.sample_rate),
             "模型采样率无效"
@@ -59,6 +110,10 @@ impl Manifest {
 /// User-declared metadata displayed before loading any native model.
 #[non_exhaustive]
 pub struct ModelMetadata {
+    /// Backend and transcript semantics.
+    pub kind: ModelKind,
+    /// Source language hints supported by this package.
+    pub languages: Vec<String>,
     /// Input sample rate required by this model.
     pub sample_rate: u32,
     /// Supported source language.
@@ -68,10 +123,25 @@ pub struct ModelMetadata {
     /// Model license supplied by its owner.
     pub license: String,
 }
+impl ModelMetadata {
+    /// Metadata from a validated curated catalog entry, without filesystem I/O.
+    pub fn from_catalog(model: &crate::models::Model) -> Self {
+        Self {
+            kind: model.kind,
+            languages: model.languages.clone(),
+            sample_rate: model.sample_rate,
+            language: model.languages.first().cloned().unwrap_or_default(),
+            source: model.source(),
+            license: format!("{} — {}", model.license, model.license_url),
+        }
+    }
+}
 /// Read lightweight model metadata; model hashing and loading happen in the worker.
 pub fn model_metadata(path: &Path) -> anyhow::Result<ModelMetadata> {
     let m = Manifest::read(path)?;
     Ok(ModelMetadata {
+        kind: m.kind,
+        languages: m.languages,
         sample_rate: m.sample_rate,
         language: m.language,
         source: m.source,
@@ -127,10 +197,13 @@ pub(crate) fn run(
     shared.status("校验并加载本地模型…", frames, false);
     let manifest = Manifest::read(path)?;
     ensure!(
-        manifest.sample_rate == config.sample_rate && manifest.language == config.language,
+        manifest.sample_rate == config.sample_rate && manifest.languages.contains(&config.language),
         "模型采样率或语种与会话不一致"
     );
     let root = path.parent().context("模型清单缺少目录")?;
+    if manifest.kind == ModelKind::SenseVoice {
+        return offline::run(config, session, frames, shared, &manifest, root);
+    }
     let mut settings = sherpa_onnx::OnlineRecognizerConfig::default();
     settings.feat_config.sample_rate = manifest.sample_rate as i32;
     settings.enable_endpoint = true;
@@ -140,12 +213,21 @@ pub(crate) fn run(
     settings.rule2_min_trailing_silence = config.vad.trailing_silence_ms as f32 / 1000.;
     settings.rule3_min_utterance_length = config.vad.max_segment_ms as f32 / 1000.;
     settings.model_config.num_threads = 2;
-    settings.model_config.transducer.encoder =
-        Some(verify(root, &manifest.encoder, || shared.stopped())?);
-    settings.model_config.transducer.decoder =
-        Some(verify(root, &manifest.decoder, || shared.stopped())?);
-    settings.model_config.transducer.joiner =
-        Some(verify(root, &manifest.joiner, || shared.stopped())?);
+    settings.model_config.transducer.encoder = Some(verify(
+        root,
+        manifest.encoder.as_ref().context("缺少 encoder")?,
+        || shared.stopped(),
+    )?);
+    settings.model_config.transducer.decoder = Some(verify(
+        root,
+        manifest.decoder.as_ref().context("缺少 decoder")?,
+        || shared.stopped(),
+    )?);
+    settings.model_config.transducer.joiner = Some(verify(
+        root,
+        manifest.joiner.as_ref().context("缺少 joiner")?,
+        || shared.stopped(),
+    )?);
     settings.model_config.tokens = Some(verify(root, &manifest.tokens, || shared.stopped())?);
     ensure!(!shared.stopped(), "模型加载已取消");
     let recognizer = sherpa_onnx::OnlineRecognizer::create(&settings)

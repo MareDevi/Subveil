@@ -10,8 +10,14 @@ use subveil_core::subtitle::TranscriptEvent;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    ensure!(args.len() == 2, "usage: local_wav_probe MODEL_MANIFEST WAV");
+    ensure!(
+        (2..=3).contains(&args.len()),
+        "usage: local_wav_probe MODEL_MANIFEST WAV [LANGUAGE]"
+    );
     let metadata = subveil_asr::model_metadata(std::path::Path::new(&args[0]))?;
+    let language = args.get(2).unwrap_or(&metadata.language).clone();
+    ensure!(metadata.languages.contains(&language), "模型不支持该语种");
+    let kind = metadata.kind;
     let wave = sherpa_onnx::Wave::read(&args[1]).context("无法读取 WAV")?;
     ensure!(
         wave.sample_rate() == metadata.sample_rate as i32,
@@ -26,7 +32,7 @@ fn main() -> anyhow::Result<()> {
         Config {
             provider: Provider::Local,
             local_model: Some(args[0].clone().into()),
-            language: metadata.language,
+            language,
             sample_rate: metadata.sample_rate,
             ..Default::default()
         },
@@ -87,9 +93,19 @@ fn main() -> anyhow::Result<()> {
     let snapshot = worker.snapshot().context("缺少本地识别统计")?;
     worker.join()?;
     println!(
-        "Local WAV: partials={partials} finals={finals} resets={} dropped_audio={} dropped_events={}",
-        snapshot.resets, snapshot.dropped_audio, snapshot.dropped_events
+        "Local WAV: mode={} partials={partials} finals={finals} resets={} dropped_audio={} dropped_events={} inference_ms={} audio_ms={}",
+        kind.name(),
+        snapshot.resets,
+        snapshot.dropped_audio,
+        snapshot.dropped_events,
+        snapshot.local_inference_ms,
+        snapshot.local_audio_ms
     );
-    ensure!(partials > 0 && finals > 0, "未收到真实 Partial 与 Final");
+    ensure!(finals > 0, "未收到真实 Final");
+    if kind == subveil_asr::ModelKind::StreamingTransducer {
+        ensure!(partials > 0, "Streaming 模型未收到真实 Partial");
+    } else {
+        ensure!(partials == 0, "离线模型不能伪造 Partial");
+    }
     Ok(())
 }

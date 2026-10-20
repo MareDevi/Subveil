@@ -1,0 +1,87 @@
+[[models]]
+id = "sensevoice-small-int8"
+name = "SenseVoice Small INT8"
+summary = "日语优先；支持日/英/中，句末输出，不能提供真实 Partial"
+repository = "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
+revision = "2365baeacb507f821a0c8120fcee3d484dba7a07"
+kind = "sense_voice"
+sample_rate = 16000
+languages = ["ja", "en", "zh"]
+license = "FunASR Model License 1.1 (custom)"
+license_url = "https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE"
+[[models.files]]
+path = "model.int8.onnx"
+size = 239233841
+sha256 = "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51"
+[[models.files]]
+path = "tokens.txt"
+size = 315894
+sha256 = "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc"
+[[models.files]]
+path = "README.md"
+size = 104
+sha256 = "763991a00edaea534ab36bf1b7cf89e61e911666dcfabbba71f91f9f7c593a63"
+
+[[models]]
+id = "zipformer-en-20m-int8"
+name = "Zipformer English 20M INT8"
+summary = "英文轻量模型；适合低延迟验证与低 CPU 占用"
+repository = "csukuangfj/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17"
+revision = "d42f2d9f7ca24806fb667456a18a9f1b60f70d16"
+kind = "streaming_transducer"
+sample_rate = 16000
+languages = ["en"]
+license = "Apache-2.0"
+license_url = "https://www.apache.org/licenses/LICENSE-2.0"
+[[models.files]]
+path = "encoder-epoch-99-avg-1.int8.onnx"
+size = 42845182
+sha256 = "3810755ce7c3ab26b42a8bcf39d191308fa27fb0f53358823ba46141d03b7eb3"
+[[models.files]]
+path = "decoder-epoch-99-avg-1.int8.onnx"
+size = 539499
+sha256 = "21e2a2acd961b3ac72f55be2f10f1a285e1b0b0ba010d7c0b6eab141411b163c"
+[[models.files]]
+path = "joiner-epoch-99-avg-1.int8.onnx"
+size = 259572
+sha256 = "e085d73b593cf9b0707f370dbd656d58327d3fe36d80d849202ef81df02cb01e"
+[[models.files]]
+path = "tokens.txt"
+size = 5048
+sha256 = "49e3c2646595fd907228b3c6787069658f67b17377c60aeb8619c4551b2316fb"
+[[models.files]]
+path = "README.md"
+size = 304
+sha256 = "505f6b0e8a39f066a0794c4fb0b5689533d3bcd9d1dc5e5f47ccffeef1af9877"
+
+[[models]]
+id = "zipformer-zh-en-int8"
+name = "Zipformer Chinese / English INT8"
+summary = "中英文 streaming；体积和计算量高于英文 20M"
+repository = "csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20"
+revision = "98590b7ed6443e77b714204da2757d75e1a642f4"
+kind = "streaming_transducer"
+sample_rate = 16000
+languages = ["en", "zh"]
+license = "Apache-2.0"
+license_url = "https://www.apache.org/licenses/LICENSE-2.0"
+[[models.files]]
+path = "encoder-epoch-99-avg-1.int8.onnx"
+size = 181895032
+sha256 = "8fa764187a261844f859d7143ebaa563af5d10adfece4c18a8f414c88cba2a9b"
+[[models.files]]
+path = "decoder-epoch-99-avg-1.int8.onnx"
+size = 13091040
+sha256 = "1a70c593d71e53f023f5f55b0b4cfff5055abb786ee3992e5f63dc2e273cc4fa"
+[[models.files]]
+path = "joiner-epoch-99-avg-1.int8.onnx"
+size = 3228404
+sha256 = "1ed689c5ed19dbaa725d9d191bb4822b5f4855a39e1ffd28cbc1f340d25b2ee0"
+[[models.files]]
+path = "tokens.txt"
+size = 56317
+sha256 = "a8e0e4ec53810e433789b54a5c0134a7eaa2ffca595a6334d54c00da858841d3"
+[[models.files]]
+path = "README.md"
+size = 296
+sha256 = "b6f9458f4208ae821beaaf11dc983486916a4089a2f3677b40f9ff06ec4e6440"

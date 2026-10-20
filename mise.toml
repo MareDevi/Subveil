@@ -52,3 +52,11 @@ run = ["mise run fmt:check", "mise run build", "mise run clippy", "mise run test
 [tasks."asr:local-wav"]
 description = "Validate an explicitly imported streaming model against a local WAV"
 run = "timeout 90s cargo run --locked -p subveil-asr --example local_wav_probe --"
+
+[tasks."model:install"]
+description = "Explicitly install a curated model using the application's verified downloader"
+run = "timeout 90s cargo run --locked -p subveil-asr --example model_install --"
+
+[tasks.models]
+description = "Open the native local model library without capture or download"
+run = "cargo run --locked -p subveil -- --models"

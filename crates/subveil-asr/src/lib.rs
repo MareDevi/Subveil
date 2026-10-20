@@ -3,8 +3,10 @@
 
 mod cloud;
 mod local;
-pub use local::{ModelMetadata, model_metadata};
+pub use local::{ModelKind, ModelMetadata, model_metadata};
 mod mock;
+/// Curated local model catalog and explicit, integrity-checked downloads.
+pub mod models;
 mod protocols;
 mod providers;
 mod vad;
@@ -71,8 +73,9 @@ impl Config {
     /// Validate settings and backend availability before capture starts.
     pub fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
-            matches!(self.language.as_str(), "en" | "ja"),
-            "ASR language must be en or ja"
+            matches!(self.language.as_str(), "en" | "ja")
+                || (self.provider == Provider::Local && self.language == "zh"),
+            "ASR language is unsupported by the selected provider"
         );
         anyhow::ensure!(
             (8_000..=48_000).contains(&self.sample_rate),
@@ -122,6 +125,10 @@ pub struct Snapshot {
     pub dropped_audio: u64,
     /// Transcript events evicted from result queue.
     pub dropped_events: u64,
+    /// Latest offline inference time, excluding segmentation and loading.
+    pub local_inference_ms: u64,
+    /// Duration of the latest offline audio segment.
+    pub local_audio_ms: u64,
 }
 struct Shared {
     stop: AtomicBool,

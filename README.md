@@ -2,7 +2,7 @@
 
 Rust + GPUI 原生跨平台实时字幕翻译应用，优先支持 Linux / Wayland / PipeWire。
 
-当前开发 **M04：本地 ASR 与实时翻译**。支持导入 sherpa-onnx streaming transducer 模型、本地 CPU 识别，以及独立 OpenAI-compatible / DeepL 文字翻译。保留 M03 云端服务及接口自带译文。默认不上传音频或文本；两种上传分别授权。真实云服务与本地模型的日语/英语质量验收仍待模型和凭据。配置见 [本地 ASR 与文字翻译](docs/local-asr-and-translation.md)。
+当前开发 **M04：本地 ASR 与实时翻译**。支持应用内选择、下载并运行三种本地 ASR 模型（英文/中英 streaming、SenseVoice 日英中分段），保留手动导入、本地 CPU 识别，以及独立 OpenAI-compatible / DeepL 文字翻译。保留 M03 云端服务及接口自带译文。默认不上传音频或文本；两种上传分别授权。三种模型已在本机下载校验，公开日语/英语/中文 WAV 推理通过；真实云端翻译质量与完整 GUI 交互仍待验收。配置见 [本地 ASR 与文字翻译](docs/local-asr-and-translation.md)。
 
 ## 开发环境
 
@@ -26,6 +26,8 @@ mise run check
 mise run run
 # 启动离线字幕演示
 mise run demo
+# 打开本地模型目录，不自动下载或采集
+mise run models
 ```
 
 控制窗口分为「实时字幕、语音服务、字幕样式、运行诊断」四个工作区。`Ctrl+1` 至 `Ctrl+4` 切换工作区，`Ctrl+Shift+O` 显示或隐藏浮窗，`Ctrl+S` 保存样式，`Ctrl+Shift+L` 切换明暗外观。恢复入口支持 `Enter` 恢复控制窗口。主题选择仅用于当前进程。
@@ -96,6 +98,8 @@ M01 使用屏幕布局中最左、其次最上方的输出，宽度与高度按�
 | `mise run build` | 锁定依赖构建 |
 | `mise run run` | 启动控制窗口 |
 | `mise run demo` | 启动离线 mock 双语浮窗 |
+| `mise run models` | 打开本地模型目录 |
+| `mise run model:install -- --list` | 列出固定版本本地模型 |
 | `mise run audio:probe -- 10 48000` | 无窗口音频统计诊断 |
 | `mise run asr:probe -- mock 10 en 16000` | 无窗口 ASR 诊断 |
 | `mise run asr:check` | 全部 ASR 目标构建、Clippy、测试 |
@@ -123,5 +127,7 @@ Workspace 包含 `subveil` 应用、`subveil-core` 核心状态、`subveil-audio
 - [M04 实施计划](docs/m04-plan.md)
 - [M04 配置](docs/local-asr-and-translation.md)
 - [M04 验收记录](docs/m04-validation.md)
+- [应用内模型库计划](docs/model-library-plan.md)
+- [模型选型与运行验收](docs/model-library-validation.md)
 
 必须使用 Conventional Commits，按可审查的小步勤提交。项目许可证待所有者确认，尚未授予开源许可证。

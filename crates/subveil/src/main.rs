@@ -1,4 +1,5 @@
 mod mock;
+mod models;
 mod overlay;
 mod session;
 mod storage;
@@ -15,6 +16,7 @@ use tracing_subscriber::EnvFilter;
 #[derive(Default)]
 struct Arguments {
     demo: bool,
+    models: bool,
     config: Option<PathBuf>,
 }
 
@@ -24,12 +26,13 @@ fn arguments() -> anyhow::Result<Option<Arguments>> {
     while let Some(argument) = args.next() {
         match argument.to_str() {
             Some("--demo") => parsed.demo = true,
+            Some("--models") => parsed.models = true,
             Some("--config") => {
                 parsed.config = Some(args.next().context("--config requires a file path")?.into())
             }
             Some("--help" | "-h") => {
                 println!(
-                    "Subveil {}\n\nUsage: subveil [--demo] [--config PATH]\n\n  --demo         Start the offline mock subtitle demonstration\n  --config PATH  Read/write subtitle styles at PATH\n  --version      Print application version\n  --help         Print this help",
+                    "Subveil {}\n\nUsage: subveil [--demo] [--models] [--config PATH]\n\n  --demo         Start the offline mock subtitle demonstration\n  --models       Open local model selection without capture or download\n  --config PATH  Read/write subtitle styles at PATH\n  --version      Print application version\n  --help         Print this help",
                     env!("CARGO_PKG_VERSION")
                 );
                 return Ok(None);
@@ -85,6 +88,9 @@ fn main() -> anyhow::Result<()> {
             })
             .detach();
             session.update(cx, |session, cx| {
+                if arguments.models {
+                    session.select_asr_provider(subveil_asr::Provider::Local, cx);
+                }
                 session.open_control(cx);
                 if arguments.demo {
                     session.start(cx);

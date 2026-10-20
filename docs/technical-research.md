@@ -129,3 +129,13 @@ M04 运行验证补充：reqwest 锁定 0.13.5，使用 rustls-no-provider 与�
 
 - https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/blob/main/README.md
 - https://k2-fsa.github.io/sherpa/onnx/pretrained_models/offline-transducer/zipformer-transducer-models.html
+
+## 应用内模型目录与 SenseVoice（2026-10-21）
+
+用户明确要求应用内选择、下载和运行，提前实施 M05 模型下载子集。选择固定 revision 的英文 20M INT8、中英 Zipformer INT8、SenseVoice Small INT8。目录文件从发布方元数据获得长度与 LFS SHA-256；tokens / README 经 Git blob ID 校验后固定 SHA-256。下载模型与 ASR、翻译分开，安装不开始音频采集。
+
+官方 Rust OfflineRecognizer 支持 SenseVoice ONNX、tokens、language、use_itn；当前用 CPU 4 线程和有界能量 VAD，仅生成 Final。这解决可运行日语模型缺口，且不混淆 streaming 与 offline。源语种按模型声明选择，未启用自动语种检测。既有 streaming 清单保持向后兼容。
+
+下载器使用 std::fs::File::try_lock（本机 Rust 1.99.1）管理同包安装互斥，锁随进程/文件句柄关闭释放。逐文件临时发布与最后提交清单，避免损坏内容标为已安装。完整缓存文件重校验后复用；未实现 HTTP Range 续传。
+
+硬件、模型固定版本、完整条款、实测和未验证项见 [模型选型与运行验收](model-library-validation.md)。当前 GPU 虽可检测，但运行库仍为 CPU，不表示 CUDA 执行已实现。

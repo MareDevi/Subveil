@@ -33,6 +33,9 @@ pub struct Session {
     pub translation_status: String,
     pub translation_dropped: u64,
     pub model_info: String,
+    pub local_models: crate::models::LocalModels,
+    pub local_languages: Vec<String>,
+    pub local_kind: subveil_asr::ModelKind,
     local_language: Option<String>,
     pub importing_model: bool,
     pub audio_stopping: bool,
@@ -85,7 +88,10 @@ impl Session {
             allow_text_upload: false,
             translation_status: "文字翻译已关闭".into(),
             translation_dropped: 0,
-            model_info: "尚未导入模型清单".into(),
+            model_info: "尚未选择本地模型".into(),
+            local_models: crate::models::LocalModels::new(),
+            local_languages: Vec::new(),
+            local_kind: subveil_asr::ModelKind::default(),
             local_language: None,
             importing_model: false,
             audio_stopping: false,
@@ -104,6 +110,15 @@ impl Session {
         let now = Instant::now();
         let now_ms = self.started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
         let mut changed = self.subtitles.expire(now_ms);
+        let (model_changed, installed) = self.local_models.poll();
+        changed |= model_changed;
+        if let Some((path, model)) = installed {
+            self.apply_local_model(path, subveil_asr::ModelMetadata::from_catalog(&model));
+            self.message = format!(
+                "{} 已安装并选用；点击「开始本地识别」后才采集音频。",
+                model.name
+            );
+        }
         if let Some(capture) = &self.audio_capture {
             if let Some(snapshot) = capture.snapshot() {
                 self.audio = snapshot;
@@ -284,7 +299,7 @@ impl Session {
     }
 
     pub fn select_asr_provider(&mut self, provider: subveil_asr::Provider, cx: &mut Context<Self>) {
-        if self.recognition.is_none() {
+        if self.recognition.is_none() && !self.local_models.downloading() {
             self.asr_config.provider = provider;
             if provider == subveil_asr::Provider::Local {
                 self.audio.sample_rate = self.asr_config.sample_rate;
@@ -314,18 +329,37 @@ impl Session {
     }
 
     pub fn cycle_asr_language(&mut self, cx: &mut Context<Self>) {
-        if self.recognition.is_none() {
-            self.asr_config.language = if self.asr_config.language == "en" {
-                "ja"
+        if self.recognition.is_none() && !self.local_models.downloading() {
+            if self.asr_config.provider == subveil_asr::Provider::Local {
+                if let Some(index) = self
+                    .local_languages
+                    .iter()
+                    .position(|lang| *lang == self.asr_config.language)
+                {
+                    let next = (index + 1) % self.local_languages.len();
+                    self.asr_config
+                        .language
+                        .clone_from(&self.local_languages[next]);
+                    self.local_language = Some(self.asr_config.language.clone());
+                }
             } else {
-                "en"
+                self.asr_config.language = if self.asr_config.language == "en" {
+                    "ja"
+                } else {
+                    "en"
+                }
+                .into();
             }
-            .into();
             cx.notify();
         }
     }
 
     pub fn toggle_asr(&mut self, cx: &mut Context<Self>) {
+        if self.local_models.downloading() || self.importing_model {
+            self.message = "请等待模型安装或导入完成，再开始识别。".into();
+            cx.notify();
+            return;
+        }
         if self.recognition.is_some() {
             self.stop(cx);
             return;
@@ -390,7 +424,10 @@ impl Session {
                 self.message = if self.asr_config.provider == subveil_asr::Provider::Mock {
                     "Mock ASR 仅按音频能量输出预设样本，不是真实识别。".into()
                 } else if self.asr_config.provider == subveil_asr::Provider::Local {
-                    "本地 streaming ASR 已启动；后台校验并加载模型，不上传音频。".into()
+                    format!(
+                        "本地 {} 已启动；后台加载模型，不上传音频。",
+                        self.local_kind.name()
+                    )
                 } else {
                     format!(
                         "{} 已启动：系统音频发送至 {}；点击停止撤销本次上传。{}",
@@ -438,43 +475,84 @@ impl Session {
     }
 
     pub fn import_model(&mut self, cx: &mut Context<Self>) {
-        if self.asr_active() || self.importing_model {
+        if self.asr_active() || self.importing_model || self.local_models.downloading() {
             return;
         }
         let picker = cx.prompt_for_paths(gpui_kit::PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("导入 streaming 模型 TOML 清单".into()),
+            prompt: Some("导入本地模型 TOML 清单".into()),
         });
         self.importing_model = true;
         cx.notify();
         cx.spawn(async move |session, cx| {
             let result: anyhow::Result<_> = async {
                 let paths = picker.await??;
-                let Some(path) = paths.and_then(|paths| paths.into_iter().next()) else { return Ok(None); };
-                cx.background_executor().spawn(async move {
-                    let metadata = subveil_asr::model_metadata(&path)?;
-                    Ok(Some((path, metadata)))
-                }).await
-            }.await;
+                let Some(path) = paths.and_then(|paths| paths.into_iter().next()) else {
+                    return Ok(None);
+                };
+                cx.background_executor()
+                    .spawn(async move {
+                        let metadata = subveil_asr::model_metadata(&path)?;
+                        Ok(Some((path, metadata)))
+                    })
+                    .await
+            }
+            .await;
             let _ = session.update(cx, |session, cx| {
                 session.importing_model = false;
                 match result {
                     Ok(Some((path, metadata))) if !session.asr_active() => {
-                        session.model_info = format!("{} · {} Hz · {}\n来源：{}\n许可证：{}\n启动后校验文件与 SHA-256 并加载模型", path.display(), metadata.sample_rate, metadata.language, metadata.source, metadata.license);
-                        session.asr_config.local_model = Some(path);
-                        session.asr_config.sample_rate = metadata.sample_rate;
-                        session.local_language = Some(metadata.language.clone());
-                        session.asr_config.language = metadata.language;
-                        session.audio.sample_rate = metadata.sample_rate;
+                        session.apply_local_model(path, metadata);
                     }
                     Ok(_) => {}
                     Err(error) => session.model_info = format!("无法导入模型：{error}"),
                 }
                 cx.notify();
             });
-        }).detach();
+        })
+        .detach();
+    }
+
+    fn apply_local_model(&mut self, path: PathBuf, metadata: subveil_asr::ModelMetadata) {
+        self.model_info = format!(
+            "{} · {} Hz · {}\n{}\n来源：{}\n许可证：{}",
+            path.display(),
+            metadata.sample_rate,
+            metadata.language,
+            metadata.kind.name(),
+            metadata.source,
+            metadata.license
+        );
+        self.asr_config.local_model = Some(path);
+        self.asr_config.sample_rate = metadata.sample_rate;
+        self.local_kind = metadata.kind;
+        self.local_languages = metadata.languages;
+        self.local_language = Some(metadata.language.clone());
+        self.asr_config.language = metadata.language;
+        if self.audio_capture.is_none() {
+            self.audio.sample_rate = metadata.sample_rate;
+        }
+    }
+
+    pub fn select_local_model(&mut self, id: &str, cx: &mut Context<Self>) {
+        if !self.asr_active() && !self.importing_model && self.local_models.select(id) {
+            self.asr_config.local_model = None;
+            self.local_languages.clear();
+            self.model_info = "点击「安装并选用」准备此模型；已经下载的文件会校验后复用。".into();
+            cx.notify();
+        }
+    }
+    pub fn install_local_model(&mut self, cx: &mut Context<Self>) {
+        if !self.asr_active() && !self.importing_model {
+            self.local_models.install();
+            cx.notify();
+        }
+    }
+    pub fn cancel_model_install(&mut self, cx: &mut Context<Self>) {
+        self.local_models.cancel();
+        cx.notify();
     }
 
     pub fn overlay_visible(&self) -> bool {
@@ -622,6 +700,7 @@ impl Session {
                 || self.overlay_requested
                 || self.audio_capture.is_some()
                 || self.recognition.is_some()
+                || self.local_models.downloading()
             {
                 let session = cx.entity();
                 cx.defer(move |cx| match ui::open_recovery(session.clone(), cx) {

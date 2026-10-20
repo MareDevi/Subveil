@@ -12,7 +12,7 @@
 - RTX 4060 Laptop，8188 MiB 显存，NVIDIA 615.78.08。沙箱内 GPU 设备不可见，沙箱外只读查询正常。现有 sherpa 原生库为 CPU，不据此宣称 CUDA 可用。
 - 使用当前官方 sherpa-onnx 1.13.8，保留 streaming transducer；增加 SenseVoice offline API，通过有界 VAD 分段调用，只返回 Final。
 
-候选：英文 Zipformer 20M INT8（约 44 MB），中英 Zipformer INT8（约 198 MB），SenseVoice Small INT8（约 240 MB，日/英/中）。前两者模型卡标注 Apache-2.0；SenseVoice 上游模型卡引用 FunASR Model License，不能误标为代码的 MIT 许可证。
+候选：英文 Zipformer 20M INT8（约 44 MB），中英 Zipformer INT8（约 198 MB），SenseVoice Small INT8（约 240 MB，日/英/中）。前两者模型卡标注 Apache-2.0；SenseVoice 上游模型卡引用 FunASR Model License，不能误标为运行库的 Apache-2.0 许可证。
 
 ## 实施清单
 

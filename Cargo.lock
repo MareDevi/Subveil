@@ -6487,6 +6487,8 @@ dependencies = [
  "futures-util",
  "hmac",
  "prost",
+ "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "sha1",

@@ -1,6 +1,7 @@
 use gpui_kit::component::{
     ActiveTheme, Disableable, IndexPath, Root, Sizable, Theme, ThemeMode,
     button::{Button, ButtonVariants},
+    link::Link,
     radio::RadioGroup,
     scroll::ScrollableElement,
     select::{Select, SelectEvent, SelectState},
@@ -108,6 +109,7 @@ pub struct ControlView {
     focus: FocusHandle,
     scroll: [ScrollHandle; 4],
     provider: Entity<SelectState<Vec<SharedString>>>,
+    local_model: Entity<SelectState<Vec<SharedString>>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -128,6 +130,31 @@ impl ControlView {
                 cx,
             )
         });
+        let model_names = session
+            .read(cx)
+            .local_models
+            .catalog
+            .iter()
+            .map(|model| SharedString::from(model.name.clone()))
+            .collect::<Vec<_>>();
+        let model_index = (!model_names.is_empty())
+            .then(|| IndexPath::new(session.read(cx).local_models.selected));
+        let local_model = cx.new(|cx| SelectState::new(model_names, model_index, window, cx));
+        let model_session = session.clone();
+        let model_selected = cx.subscribe(&local_model, move |_, _, event, cx| {
+            if let SelectEvent::Confirm(Some(name)) = event {
+                let id = model_session
+                    .read(cx)
+                    .local_models
+                    .catalog
+                    .iter()
+                    .find(|model| model.name == name.as_ref())
+                    .map(|model| model.id.clone());
+                if let Some(id) = id {
+                    model_session.update(cx, |session, cx| session.select_local_model(&id, cx));
+                }
+            }
+        });
         let observed = cx.observe(&session, |_, _, cx| cx.notify());
         let selected_session = session.clone();
         let selected = cx.subscribe(&provider, move |_, _, event, cx| {
@@ -143,11 +170,16 @@ impl ControlView {
         window.focus(&focus, cx);
         Self {
             session,
-            page: 0,
+            page: if current == subveil_asr::Provider::Local {
+                1
+            } else {
+                0
+            },
             focus,
             scroll: std::array::from_fn(|_| ScrollHandle::new()),
             provider,
-            _subscriptions: vec![observed, selected],
+            local_model,
+            _subscriptions: vec![observed, selected, model_selected],
         }
     }
 
@@ -292,14 +324,17 @@ impl ControlView {
     fn render_services(&self, cx: &App) -> gpui_kit::Div {
         let session = self.session.read(cx);
         let provider = session.asr_config.provider;
-        let busy = session.asr_active() || session.asr_stopping;
+        let busy = session.asr_active()
+            || session.asr_stopping
+            || session.local_models.downloading()
+            || session.importing_model;
         column()
             .child(heading("语音服务", "选择识别服务与文字翻译；本地识别不上传音频。", cx))
             .child(field("识别服务", Select::new(&self.provider).disabled(busy)
                 .accessibility_label("识别服务").w_full(), cx))
             .child(field("语言", row()
                 .child(button("asr-language", format!("源语种：{}", if provider.automatic_language() { "自动识别" } else { &session.asr_config.language }), &self.session, Session::cycle_asr_language)
-                    .disabled(busy || provider.automatic_language() || provider == subveil_asr::Provider::Local))
+                    .disabled(busy || provider.automatic_language() || (provider == subveil_asr::Provider::Local && session.local_languages.len() <= 1)))
                 .child(button("asr-target", format!("目标语种：{}", session.asr_config.target_language), &self.session, Session::cycle_target_language)
                     .disabled(busy)), cx))
             .child(column().gap_2()
@@ -308,21 +343,19 @@ impl ControlView {
                 .child(help(if provider.translates() { "显示服务自带译文；不播放返回语音。" } else { "此服务仅输出原文。" }, cx))
                 .child(help(if provider == subveil_asr::Provider::Mock {
                     "Mock ASR 会采集本机系统音频，按音频能量输出预设样本。"
-                } else if provider == subveil_asr::Provider::Local { "导入模型后开始识别；文件校验与推理均在本机执行。" } else { "仅点击下方同意按钮才开始上传。云服务可能收费；请先通过环境变量配置服务凭据。" }, cx)))
+                } else if provider == subveil_asr::Provider::Local { "在下方选择并安装模型，再开始识别。模型推理均在本机执行。" } else { "仅点击下方同意按钮才开始上传。云服务可能收费；请先通过环境变量配置服务凭据。" }, cx)))
             .child(row().child(button("asr-start", if session.asr_stopping { "正在停止…" }
                 else if session.asr_active() { "停止识别与音频" }
                 else if provider == subveil_asr::Provider::Mock { "开始 Mock ASR" }
                 else if provider == subveil_asr::Provider::Local { "开始本地识别" }
                 else { "同意上传并开始" }, &self.session, Session::toggle_asr)
-                .disabled(session.asr_stopping || (!session.asr_active() && (session.audio_active() || session.audio_stopping)))
+                .disabled(session.asr_stopping || session.local_models.downloading() || session.importing_model || (!session.asr_active() && (session.audio_active() || session.audio_stopping || (provider == subveil_asr::Provider::Local && session.asr_config.local_model.is_none()))))
                 .loading(session.asr_stopping)))
             .child(help(if session.audio_active() && !session.asr_active() {
                 "独立采集正在运行。请在「运行诊断」停止采集，再开始识别。"
             } else { "切换服务与语言前，请先停止识别。" }, cx))
             .child(div().text_sm().child(session.asr.status.clone()))
-            .when(provider == subveil_asr::Provider::Local, |view| view
-                .child(button("import-model", "导入模型清单…", &self.session, Session::import_model).disabled(busy || session.importing_model).loading(session.importing_model))
-                .child(help(session.model_info.clone(), cx)))
+            .when(provider == subveil_asr::Provider::Local, |view| view.child(self.render_local_models(cx)))
             .child(field("文字翻译", button("translation-provider", format!("翻译服务：{}", session.translation_provider.name()), &self.session, Session::cycle_translation).disabled(busy || provider.translates()), cx))
             .child(help(if provider.translates() { "此语音服务自带译文，不再调用独立文字翻译。" } else { "仅翻译已确定的句子。云端文字翻译可能收费，需独立授权上传原文与最多三句上下文。" }, cx))
             .child(help(format!("文本上传目标：{}", session.translation_provider.destination()), cx))
@@ -330,6 +363,68 @@ impl ControlView {
                 .disabled(busy || provider.translates() || session.translation_provider == subveil_translate::Provider::Disabled))
             .child(help(session.translation_status.clone(), cx))
             .child(help(format!("翻译队列丢弃：{}", session.translation_dropped), cx))
+    }
+
+    fn render_local_models(&self, cx: &App) -> gpui_kit::Div {
+        let session = self.session.read(cx);
+        let models = &session.local_models;
+        let installing = models.downloading();
+        let busy =
+            session.asr_active() || session.asr_stopping || session.importing_model || installing;
+        let mut view = column().child(field(
+            "下载模型",
+            Select::new(&self.local_model)
+                .disabled(busy)
+                .accessibility_label("本地模型目录")
+                .w_full(),
+            cx,
+        ));
+        if let Some(model) = models.current() {
+            view = view
+                .child(help(
+                    format!(
+                        "{} · {} · {:.1} MB · CPU",
+                        model.kind.name(),
+                        model.languages.join(" / "),
+                        model.size() as f64 / 1_000_000.
+                    ),
+                    cx,
+                ))
+                .child(help(model.summary.clone(), cx))
+                .child(help(format!("来源：{}", model.repository), cx))
+                .child(
+                    row()
+                        .child(
+                            Link::new("model-source")
+                                .href(model.source())
+                                .child("模型来源"),
+                        )
+                        .child(
+                            Link::new("model-license")
+                                .href(model.license_url.clone())
+                                .child(format!("许可：{}", model.license)),
+                        ),
+                )
+                .child(help(
+                    format!(
+                        "存储目录：{}",
+                        models
+                            .root
+                            .as_ref()
+                            .map(|path| path.display().to_string())
+                            .unwrap_or_else(|| "不可用".into())
+                    ),
+                    cx,
+                ));
+        }
+        view
+            .child(row()
+                .child(button("install-model", "安装并选用", &self.session, Session::install_local_model).disabled(busy || models.current().is_none()))
+                .child(button("cancel-model", "取消下载", &self.session, Session::cancel_model_install).disabled(!installing))
+                .child(button("import-model", "导入已有模型…", &self.session, Session::import_model).disabled(busy)))
+            .child(help("安装会从 Hugging Face 下载模型文件，不上传音频。已下载文件校验后复用；安装不自动开始识别。", cx))
+            .child(help(format!("{} · {:.1} / {:.1} MB", models.snapshot.status, models.snapshot.completed as f64 / 1_000_000., models.snapshot.total as f64 / 1_000_000.), cx))
+            .child(help(session.model_info.clone(), cx))
     }
 
     fn render_appearance(&self, cx: &App) -> gpui_kit::Div {
@@ -689,6 +784,8 @@ impl Render for ControlView {
             "正在停止"
         } else if session.asr_active() {
             "识别中"
+        } else if session.local_models.downloading() {
+            "模型安装中"
         } else if session.running {
             "离线演示中"
         } else if session.audio_active() {
@@ -868,6 +965,8 @@ impl Render for RecoveryView {
             .child(help(
                 if self.session.read(cx).asr_active() {
                     "语音识别仍在运行"
+                } else if self.session.read(cx).local_models.downloading() {
+                    "本地模型仍在安装；恢复控制窗口可查看进度或取消"
                 } else if self.session.read(cx).running {
                     "离线演示仍在运行"
                 } else if self.session.read(cx).audio_active() {

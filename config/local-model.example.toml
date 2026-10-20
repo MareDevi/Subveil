@@ -1,6 +1,8 @@
 # Copy beside an unpacked sherpa-onnx streaming transducer model.
 # Replace every path and hash with values from your own model package.
 # Offline Whisper/Paraformer packages are not compatible with this backend.
+kind = "streaming_transducer"
+languages = ["en"]
 language = "en"
 sample_rate = 16000
 source = "https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models"

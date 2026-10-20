@@ -1,32 +1,51 @@
 # 本地 ASR 与文字翻译（M04）
 
-## 本地模型导入
+## 应用内模型选择与下载
 
-使用官方 sherpa-onnx 1.13.8 CPU streaming transducer。只接受对应 streaming encoder / decoder / joiner / tokens；不把离线分块识别标为流式。当前支持清单声明 en 或 ja。仅英文 streaming 模型完成真实推理验证；尚未选定并验证可用的日语 streaming 模型。官方日语 ReazonSpeech offline Zipformer 不能导入本后端。语言能否识别取决于实际模型，修改清单语言不会增加模型能力。
+运行 `mise run models`，或在控制窗口「语音服务」选择「本地 sherpa-onnx」。从「下载模型」选择候选，核对来源、许可证、下载量和运行模式，点击「安装并选用」。安装完成后再点击「开始本地识别」。安装本身不会开始音频采集；本地识别不会上传音频。
 
-自行取得模型并核对其来源、许可证与发布者提供的完整性信息。应用不下载模型。复制 `config/local-model.example.toml` 到解包模型目录，填写文件名、实际输入采样率、来源、许可证和各文件 SHA-256。相对路径以清单目录为基准，也支持绝对路径。
+| 模型 | 语言 | 下载量 | 运行方式 | 权重许可证 |
+| --- | --- | --- | --- | --- |
+| SenseVoice Small INT8 | 日 / 英 / 中 | 239.5 MB | CPU，VAD 分段后识别，仅 Final | FunASR Model License 1.1，自定义条款 |
+| Zipformer English 20M INT8 | 英 | 43.6 MB | CPU，真正 streaming，Partial / Final | Apache-2.0 |
+| Zipformer Chinese / English INT8 | 英 / 中 | 198.3 MB | CPU，真正 streaming，Partial / Final | Apache-2.0 |
 
-在「语音服务」选择「本地 sherpa-onnx」，点击「导入模型清单…」。界面显示用户声明的来源、许可证、语种、采样率；这不是对许可证真实性的认证。启动后后台先校验全部 SHA-256，再通过原生 API 加载 ONNX。缺文件、错误校验值或不兼容模型明确报错，不启用云端后备。
+日语优先选择 SenseVoice；英文低延迟先试 Zipformer 20M；中英文混合场景再比较中英 Zipformer。语言能力取决于权重，不能通过修改清单增加语言。SenseVoice 上游模型卡引用自定义 [FunASR Model License](https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE)，不能套用运行库 Apache-2.0 或代码许可证。
 
-推理与校验均不占 GPUI 主线程。音频不连续或 2 秒无 PCM 时重置流；加载时积压音频直接丢弃，避免追赶历史。模型使用 sherpa endpoint rules；有文字时默认尾静音 600 ms 分段，无文字时至少 2.4 秒静音重置，最长 15 秒强制分段。尾静音和最大段长来自 Config.vad，能量阈值、前置缓冲和最小语音时长不用于本地模型端点。采样率来自清单；PipeWire 按模型速率输出单声道 PCM。CPU 推理落后于实时速度时可能频繁重置，应使用更轻模型或更快设备。
+模型保存在 `$XDG_DATA_HOME/subveil/models`；未设置或不是绝对路径时，使用 `$HOME/.local/share/subveil/models`。每个模型按 ID 与固定 revision 分目录。应用先流式下载到临时文件，核对精确长度和 SHA-256，再原子发布文件；全部文件通过后才生成运行清单。目录内含发布者 README 和来源、许可信息。
 
-停止请求能在文件校验块之间和解码步骤之间取消。单次原生模型创建/推理调用无法强制中断，GUI 不等待线程退出。正常停止清空会话并丢弃迟到结果，不保证输出尚未完成的最后半句。当前不持久化模型选择，不提供下载、GPU 或模型管理。
+界面显示下载进度，支持取消及重试。已验证的完整文件保留并复用；未完成的单个文件不提供 HTTP Range 续传，需要重新下载。安装锁阻止多个进程同时写入同一包；崩溃后操作系统释放锁，重试会清理未发布的 `.part`。取消、断网、校验错误或空间不足均不激活新模型，不回退云端。HF 及官方 CDN 使用 HTTPS，跳转次数最多 5 次，连接超时 15 秒、无数据读取超时 30 秒、单文件总期限 600 秒。
 
-无窗口系统音频诊断（不会上传音频或调用文字翻译）：
+模型文件跨重启保留；当前选择暂不持久化，重启后选中相同目录项再点击「安装并选用」，会校验复用已有文件，无需重复联网。运行识别时禁用模型更换，停止后释放模型；单次原生加载/推理调用仍不能强制中断。关闭控制窗口时，进行中的安装与会话保留在恢复入口。
+
+## 本地识别方式
+
+使用官方 sherpa-onnx 1.13.8 CPU 运行库。Zipformer 使用 streaming transducer；默认有文字时尾静音 600 ms 分段，无文字时至少 2.4 秒静音重置，最长 15 秒分段。能量阈值和前置缓冲不参与 streaming 模型端点。
+
+SenseVoice 使用 offline API，按能量 VAD 结束的语音段识别，默认保留 200 ms 前置缓冲、至少 150 ms 有声、600 ms 尾静音、最长约 15 秒分段；输入按 30 秒上限截取，PCM 缓冲始终有界。只返回 Final，不伪造增量 Partial。CPU 解码时间单独显示，不包含加载、等待分段与字幕显示，不能作为端到端延迟。
+
+音频不连续、队列过载或 2 秒无 PCM 时重置分段/流；加载积压直接丢弃，不无限追赶历史。采样率来自模型包，PipeWire 按所需速率输出单声道 PCM。当前固定 CPU：SenseVoice 4 个推理线程，streaming 2 个线程。检测到 NVIDIA GPU 不等于此 CPU 运行库已支持 CUDA。
+
+## 导入已有模型与诊断
+
+仍支持「导入已有模型…」。Streaming 清单示例为 `config/local-model.example.toml`；旧清单缺少 `kind` 与 `languages` 时按原 streaming 单语义读取。新增 `kind = "sense_voice"` 时使用 `[model]`、`[tokens]`，并要求 16 kHz；不要提供 encoder / decoder / joiner。`languages` 可列 en / ja / zh，`language` 为默认源语种。界面按模型声明切换源语种。所有文件在后台校验后才加载。
+
+官方日语 ReazonSpeech offline Zipformer、Whisper 和 Paraformer 暂不支持此导入后端。模型清单中的来源和许可是提供方声明，不是应用的法律认证。未完成句子在停止时可能被丢弃。
+
+无窗口诊断：
 
 ```sh
-SUBVEIL_LOCAL_MODEL=/absolute/path/model.toml mise run asr:probe -- local 10 en 16000
+# 列出目录；不联网
+mise run model:install -- --list
+# 显式安装，使用与 GUI 完全相同的下载器
+mise run model:install -- sensevoice-small-int8
+# 重放自己的 WAV；模型路径由安装器打印，可选源语种
+mise run asr:local-wav -- /absolute/path/model.toml /absolute/path/test.wav ja
+# 捕获系统音频；不调用文字翻译
+SUBVEIL_LOCAL_MODEL=/absolute/path/model.toml mise run asr:probe -- local 10 ja 16000
 ```
 
-语种与速率应匹配模型。只有显式 `--print-transcripts` 才打印识别文本。
-
-可重放本地 WAV 验证模型加载与真实 Partial / Final，不采集设备，不输出文本：
-
-```sh
-mise run asr:local-wav -- /absolute/path/model.toml /absolute/path/test.wav
-```
-
-WAV 必须匹配模型采样率，时长不超过 30 秒。诊断以 20 ms 块模拟实时输入，补两秒静音，验证至少一条 Partial 与 Final，并报告重置与丢弃统计。
+WAV 诊断不采集设备或输出文本，要求速率匹配、时长不超过 30 秒。20 ms 帧模拟实时输入，补两秒静音；streaming 验证 Partial 与 Final，SenseVoice 验证仅 Final。报告队列丢弃、重置与离线解码统计。系统音频诊断只有显式 `--print-transcripts` 才打印识别文本。命令行诊断限制 90 秒，应用安装仍按上述网络期限执行。
 
 首次构建 `sherpa-onnx-sys` 会从官方 GitHub release 下载 CPU 原生运行库，不包含语音模型。可使用 `SHERPA_ONNX_LIB_DIR` 指定自行构建的同版本静态库目录，或用 `SHERPA_ONNX_ARCHIVE_DIR` 提供官方归档。Cargo.lock 固定 Rust 包，但上游构建脚本没有验证原生归档的发布者校验值；生产供应链应自行验证/构建并指定库目录。应用保持 forbid unsafe；FFI 由官方依赖封装。
 
