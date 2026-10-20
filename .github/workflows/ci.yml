@@ -1,0 +1,25 @@
+name: Rust quality
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux development libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config clang cmake libfontconfig1-dev \
+            libfreetype6-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libxcb1-dev libxcb-xkb-dev libssl-dev libzstd-dev libvulkan-dev libpipewire-0.3-dev
+      - uses: jdx/mise-action@v3
+        with:
+          version: 2026.10.15
+      - run: mise run doctor
+      - run: mise run check
