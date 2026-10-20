@@ -60,3 +60,13 @@ M00 仅创建普通控制窗口。上述为源码能力确认，**不是浮窗�
 - [mise 任务配置](https://mise.jdx.dev/tasks/task-configuration.html)
 
 验收结果见 `docs/m00-validation.md`；不以文档调研替代运行验证。
+
+## M01 实施补充（2026-10-20）
+
+- 保持所有 GPUI 与组件库版本不变；新增真实使用的 `subveil-core`，隔离配置、字幕状态与窗口实现。
+- 同步开窗可能立即调用 Render，窗口创建必须在持有 Session Entity update 之外执行。使用 `App::defer` 后，控制窗口、浮窗、恢复入口均已运行验证。
+- 所选 Wayland 后端 `primary_display()` 明确返回 None；不能用它判断无显示器。通过 `displays()` 枚举，按输出布局排序选择首个。
+- Layer Shell 输入区域穿透、不抢焦点、透明、底部锚定与全屏视频叠加均在当前 Hyprland 实测；这不扩大为所有 compositor 的支持承诺。
+- 核心状态拒绝旧 session / revision 以及已过期或淘汰的段，mock 计时器使用单调时钟。窗口重建不重置字幕。
+- 配置使用 serde + TOML；原生文件读写在应用 storage 模块。用户显式保存时后台原子替换，加载错误持续展示，不自动覆盖坏配置。
+- M01 计划和验收详见 `docs/m01-plan.md` 与 `docs/m01-validation.md`。

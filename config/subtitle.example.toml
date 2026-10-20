@@ -1,0 +1,18 @@
+# Copy this file to $XDG_CONFIG_HOME/subveil/subtitle.toml, or use --config PATH.
+# Changes are loaded on startup. The control window saves only on explicit request.
+# Colors are 24-bit RGB integers. Opacity affects only the panel background.
+font_family = "sans-serif"
+font_size = 32.0
+source_ratio = 0.75
+background_opacity = 0.65
+source_color = 0xcbd5e1
+translation_color = 0xffffff
+background_color = 0x10151e
+width = 960.0
+bottom_margin = 64.0
+max_lines = 3
+click_through = true
+# bilingual, source, or translation
+display_mode = "bilingual"
+ttl_ms = 8000
+history_limit = 32
