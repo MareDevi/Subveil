@@ -696,7 +696,6 @@ ASR/翻译消费者落后时应记录事件，并采取合理的丢帧、重置�
 - PipeWire: https://pipewire.pages.freedesktop.org/pipewire/
 - pipewire-rs: https://crates.io/crates/pipewire
 - sherpa-onnx: https://github.com/k2-fsa/sherpa-onnx
-- Mimi: https://github.com/yuxino/mimi
 - Sokuji: https://github.com/kizuna-ai-lab/sokuji
 
 参考项目仅用于学习实现方式，不直接复制其代码。复用时须遵守对应开源许可证。

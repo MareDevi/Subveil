@@ -91,22 +91,16 @@ SPA chunk 按 offset / size / stride 校验，拒绝损坏标记与超过 256 Ki
 
 依据：[Crossbeam ArrayQueue 源码](https://github.com/crossbeam-rs/crossbeam/blob/master/crossbeam-queue/src/array_queue.rs)、本机 SPA buffer.h 与 libspa 0.10.1 buffer API。Context7 已先查询 `/crossbeam-rs/crossbeam`，实际依赖固定在 Cargo.lock。
 
-## M03 调研（2026-10-20）
+## M03 云语音协议调研（2026-10-20）
 
-Context7 先 resolve 再 query：`/websites/developers_deepgram`、`/websites/rs_sherpa-onnx_sherpa_onnx`、`/snapview/tokio-tungstenite`。核对官方发布源码，保留已有 GPUI 类型来源。
+先通过 Context7 resolve/query 检索各家官方资料，无法完整返回的文档再核对官方页面。OpenAI 同时使用 OpenAI Docs 工作流，Azure 使用微软官方协议。服务协议来源、模型、凭据和能力差异统一记录于 `docs/cloud-services.md`。
 
-Deepgram Listen v1 的 nova-3 支持 en/ja；WebSocket 采用 Authorization: Token、linear16 单声道、显式 sample_rate、interim_results=true。is_final 稳定当前识别范围，speech_final 表示端点，二者不能混同。超时/断开重连后丢弃旧音频，不回放积压。来源：https://developers.deepgram.com/docs/models-languages-overview 、https://developers.deepgram.com/docs/understand-endpointing-interim-results 、https://developers.deepgram.com/docs/audio-keep-alive 。
+- 保留 Deepgram Listen v1；新增阿里 LiveTranslate、Google Live、火山 AST v2、腾讯实时语音翻译、百度实时语音翻译、OpenAI Realtime Translation、Azure OpenAI 和 xAI Voice。提供自定义 DashScope 与 OpenAI GA 转写端点。
+- 阿里源文 delta 按 item_id 累加，译文通过 previous_item_id 关联。腾讯依据 sentence_id / sentence_end，百度分开处理 MID 的 asr 和 FIN 的 sentence，避免下一句预览混入已确定原文。
+- OpenAI 的 elapsed_ms 是对齐元数据，不是唯一事件 ID；相同时间可有多个 delta，不能按时间去重。OpenAI / Azure / Google 使用单独、有界的连续原文和译文窗口，不虚构逐句配对或 Final。
+- xAI 的 input_audio_transcription.updated 是累计修订，不是 append delta。response_id 绑定已提交的回合；后来的讲话不能改变既有译文关联。
+- 火山 AST v2 使用新版 X-Api-Key 与资源头，WebSocket 二进制载荷为 Protobuf，不套用旧音频协议头。通过 prost 0.14.4 实现所需字段。官方页面可在浏览器读取；附件下载未完成，当前字段实现仍须实际服务样本复核。
+- 腾讯参数排序后做 HMAC-SHA1、Base64 和查询参数编码；使用独立已知向量测试签名。每次重连刷新 nonce / voice_id，不打印完整 URL 或鉴权材料。
+- 保持 tokio-tungstenite 0.28.0 与现有 GPUI 版本。新增 protobuf、安全 URL、HMAC、Base64 直接依赖；移除 sherpa-onnx 及其原生构建依赖。本地模型推迟至 M04，前期原生绑定探索不再作为当前实现或验收结论。
 
-官方 sherpa-onnx 1.13.8 发布包提供 OnlineRecognizer::create/create_stream、accept_waveform、is_ready/decode、get_result/is_endpoint/reset。默认静态绑定的 sys build script 可下载原生运行库；可用 SHERPA_ONNX_LIB_DIR 提供预安装库。本项目将其放入可选特性，不自动下载模型；模型来源、许可证和哈希由用户在部署时确认。来源：https://docs.rs/crate/sherpa-onnx/1.13.8/source/ 、https://docs.rs/crate/sherpa-onnx-sys/1.13.8/source/build.rs 。
-
-Tokio WebSocket 由后台专用 runtime 驱动；握手、读写与取消均需有时限，限制服务响应大小。上游文档：https://github.com/snapview/tokio-tungstenite 。
-
-### M03 实现补充
-
-实际固定 `tokio-tungstenite 0.28.0`，核对该发布包的 IntoClientRequest、connect_async_with_config、WebSocketConfig builder 和 Message API；没有升级 GPUI。选择官方 `sherpa-onnx =1.13.8` 安全绑定，默认构建不链接模型运行库；`sherpa` 特性实际完成 Workspace 静态链接与测试。
-
-M02 的固定容量 PCM 块在后台电平消费后转入独立 16 块 handoff；捕获回调不执行 ASR、网络或推理。ASR 单独线程持有本地 recognizer 或 Tokio current-thread runtime。输出 64 事件，满时淘汰最旧并计数；输入序号、样本偏移、代次、采样率和 250 ms 接收时间约束检测连续性。
-
-本地模型使用官方 OnlineRecognizer streaming transducer API；只接收用户显式配置的模型文件，不提供自动下载或伪本地实现。Mock 的能量分段提供最小语音、起始时间前移、尾静音与最长段；真实本地后端持续喂流、使用原生 endpoint 规则；云端使用服务端 is_final。三者共享 TranscriptEvent，但不声称相同 VAD 算法或相同识别能力。
-
-Deepgram 的 is_final 结束当前识别范围，不等待 speech_final。空 Final 关闭当前段编号，不把先前 Partial 猜成已确定文本。重连丢弃旧上下文并保留单调段编号；音频来源时间是累计样本时间，非硬件 PTS。停止取消上下文和未处理结果，不强制输出可能错误的 Final。
+音频回调继续只处理 PCM；后台识别线程驱动网络。初始化确认后才发送音频，各服务以规定包长节奏发送；不把积压瞬间灌入接口。原文与译文分别有界，译文带完整 SegmentKey；UI 只接受匹配 revision 的返回。返回语音始终丢弃，不播放形成采集反馈。

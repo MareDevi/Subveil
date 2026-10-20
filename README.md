@@ -2,7 +2,7 @@
 
 Rust + GPUI 原生跨平台实时字幕翻译应用，优先支持 Linux / Wayland / PipeWire。
 
-当前开发 **M03：ASR Provider**：已接入音频驱动 Mock、Deepgram 流式接口和可选本地 sherpa-onnx streaming transducer，并保留 M01 离线双语演示与 M02 独立采集。默认不上传、不保存音频。云端须点击明确标注上传的启动按钮；真实云端和本地模型的英语、日语识别验收仍待凭据与模型。真实翻译留到 M04。
+当前开发 **M03：云端语音服务**：支持音频驱动 Mock、Deepgram，以及阿里云、Google Gemini、火山引擎、腾讯云、百度、OpenAI、Azure OpenAI、xAI 与两种自定义实时识别协议。可显示接口自带原文和译文，不另外调用文字翻译服务。默认不上传、不保存音频；云端须点击明确标注上传的启动按钮。真实云服务的英语、日语验收仍待凭据。本地模型移到 M04，当前不包含模型运行库。
 
 ## 开发环境
 
@@ -53,46 +53,23 @@ mise run audio:probe -- 60 24000
 
 诊断运行至时限后取消并等待线程退出。正常 GUI 启动不会自动采集；`--demo` 也只启动模拟字幕。音频采样率暂不持久化。Linux 以外平台会明确拒绝采集。
 
-## ASR（M03）
+## 云语音服务（M03）
 
-在控制窗口选择 Mock / Deepgram / Sherpa、en / ja，停止采集后选择 PCM 采样率，再点击 ASR 启动按钮。ASR 拥有采集会话；请先停止独立采集。停止 ASR 同时停止采集、取消未完成结果、清空字幕；线程退出前不能再次启动。离线双语演示和 ASR 互斥，隐藏或恢复窗口不会重置识别会话。
+在控制窗口直接选择服务、源语种提示与目标语种。接口要求固定采样率时自动使用 16 或 24 kHz；自动识别服务会明确显示「自动识别」。停止独立采集后点击「同意上传并开始」才向界面列出的目标发送系统音频；Mock 仅输出样本。
 
-- Mock 按能量输出带 `[Mock]` 标记的英语或日语预设样本，不识别实际语音。
-- Deepgram 使用 `nova-3`、Listen v1、mono linear16 和选择的采样率。通过环境变量 `DEEPGRAM_API_KEY` 提供凭据；不写入配置或日志。选择云端后点击「同意上传并开始 Deepgram ASR」才连接并上传默认输出音频，可能产生服务费用；点击停止撤销本次上传。没有凭据会拒绝启动，不回退其他后端。
-- Sherpa 需要可选构建特性及自行提供的 streaming transducer 模型。普通构建会明确提示缺少特性。它调用 OnlineRecognizer，属于真实 streaming API；不包含离线 Whisper 等模型的分块包装。
+服务凭据分别从环境变量读取，不持久化密钥。接口自带译文可随原文修订，迟到的旧 revision 不会覆盖新字幕。OpenAI、Azure、Google 以有界连续窗口展示，不伪造逐句 Final；其他协议使用服务本身的句段标识。服务生成的音频不播放、不保存。
 
-本地构建与模型配置（路径为示例，请替换）：
+完整服务清单、环境变量、模型与部署要求、协议差异见 [云语音服务配置](docs/cloud-services.md)。本地 ASR、模型加载和导入留到 M04；当前已移除本地后端实现与构建特性。
 
 ```sh
-# 官方 sherpa-onnx 1.13.8 原生运行库可由 SHERPA_ONNX_LIB_DIR 指定。
-# 未指定时，上游依赖 build script 会下载对应版本原生库；不会下载模型。
-export SHERPA_ENCODER=/path/to/streaming-model/encoder.onnx
-export SHERPA_DECODER=/path/to/streaming-model/decoder.onnx
-export SHERPA_JOINER=/path/to/streaming-model/joiner.onnx
-export SHERPA_TOKENS=/path/to/streaming-model/tokens.txt
-mise exec -- cargo run --locked -p subveil --features sherpa
-```
-
-模型须来自可信来源，部署前核对其许可证与发布方完整性校验值。应用没有模型下载器，不承诺任意模型支持日语或英语；本地语言选择只标记结果，实际语言由模型决定。设置 PCM 速率须匹配模型特征采样率。ONNX Runtime CPU 推理在后台线程执行，模型加载和单次原生推理调用本身无法强制中断；取消在调用之间生效。
-
-基础 VAD 是能量分段，非 Silero：默认 RMS 0.01、最小有声 150 ms、起始时间前移最多 200 ms、尾部静音 600 ms、最长 15 s。Mock 使用全部参数；本地流持续接收 PCM（含前置静音），使用 sherpa 原生端点与尾静音/最大段长规则；云端使用服务端 endpointing 和真实 is_final。`VadConfig` 可由管线调用方配置，GUI 当前使用默认值，不持久化 ASR 设置。
-
-结果队列固定 64 个事件，满时淘汰最旧并计数；UI 每 250 ms 消费。Partial 使用同一段递增 revision，Final 后新段递增。音频 250 ms 过期、序号跳跃、设备换代会清除当前识别上下文；字幕历史中的旧 Partial 按原 TTL 过期。云端握手 10 s、写入 3 s、无 PCM 2 s、无服务消息 30 s 超时；断开后按 2 / 4 / 8 s 重试，丢弃积压，不上传断线期间缓存。取消在约 20 ms 轮询检查点生效，已发送到服务端的数据不能撤回。
-
-无窗口诊断，默认不输出识别文本：
-
-```sh
-mise run asr:probe -- mock 10 ja 16000
-# 必须显式允许上传，凭据通过环境变量提供
-mise run asr:probe -- deepgram 10 en 16000 --allow-upload
-# 仅显式指定此选项时将识别文本输出到终端
-mise run asr:probe -- mock 10 en 16000 --print-transcripts
-# 本地诊断
-mise exec -- timeout 90s cargo run --locked -p subveil-asr --features sherpa --example asr_probe -- sherpa 10 en 16000
+mise run asr:probe -- mock 3 ja 16000
+# 先配置对应服务的环境变量；以下命令会向所选服务上传音频。
+mise run asr:probe -- alibaba 10 en 16000 --allow-upload
+mise run asr:probe -- openai 10 ja 24000 --allow-upload
 mise run asr:check
 ```
 
-单次诊断 1–60 秒；`asr:check` 检查可选后端构建、严格 Clippy 和测试，不要求模型或付费凭据。合成音频与内存 WebSocket 测试证明协议和状态行为，不代表真实语音准确率或延迟。
+诊断默认不输出识别文本，单次最多 60 秒；只有显式 `--print-transcripts` 才打印原文和译文。`asr:check` 检查所有 ASR 目标，不再链接本地模型运行库。配置和协议测试通过不等于真实服务质量、权限或费用验收通过。
 
 ## 字幕样式
 
@@ -119,7 +96,7 @@ M01 使用屏幕布局中最左、其次最上方的输出，宽度与高度按�
 | `mise run demo` | 启动离线 mock 双语浮窗 |
 | `mise run audio:probe -- 10 48000` | 无窗口音频统计诊断 |
 | `mise run asr:probe -- mock 10 en 16000` | 无窗口 ASR 诊断 |
-| `mise run asr:check` | 可选 sherpa 后端构建、Clippy、测试 |
+| `mise run asr:check` | 全部 ASR 目标构建、Clippy、测试 |
 | `mise run fmt` | 格式化 |
 | `mise run fmt:check` | 格式检查 |
 | `mise run clippy` | 全目标严格检查 |
