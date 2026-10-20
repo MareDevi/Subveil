@@ -111,3 +111,16 @@ SPA chunk 按 offset / size / stride 校验，拒绝损坏标记与超过 256 Ki
 按用户指定的 GPUI Kit Design Guides / Coding Guides 与技能重构控制、样式预览、浮窗展示和恢复入口。Context7 返回的示例为 0.7；网站首页展示 0.7.3。通过 crates.io 与实际发布源码核对，采用兼容现有工程的 `gpui-kit =0.8.0`，保留 `gpui-pre =0.3.9` 和 `gpui-component 0.8.0`。应用只声明 Kit，一个 facade 提供框架、组件、平台与图标资源。依赖树确认只有一套 GPUI 类型。
 
 使用标准 TabBar、Select、RadioGroup、Switch、Button 和滚动条；主题来自 ActiveTheme，界面间距与字体使用 rem 辅助方法。用户配置的字幕颜色、字号以及窗口/Layer Shell 几何是明确的内容数据与平台边界，不跟随界面主题换色。字幕样式预览与浮窗共用 subtitle_panel。会话与识别生命周期仍由 Session 持有，UI 不创建服务或发起上传。详细设计与验收见 [ui-redesign.md](ui-redesign.md)。
+
+## M04 调研（2026-10-20）
+
+Context7 resolve-library-id / query-docs 后核对 crates.io 与 1.13.8 源码：官方 sherpa-onnx 提供 OnlineRecognizer::create、create_stream、is_ready、decode、get_result、is_endpoint、reset。这是持有流状态的真实 streaming API。选择 CPU transducer，模型输入速率来自用户清单。默认 static 通过 sherpa-onnx-sys 构建脚本链接官方预编译库；SHERPA_ONNX_LIB_DIR 可指定自建库。没有在应用内下载模型。
+
+DeepL POST /v2/translate 使用 DeepL-Auth-Key、text 数组、target_lang、可选 source_lang 与 context。OpenAI-compatible POST /chat/completions 使用 Bearer、model 和 messages，读取 choices[0].message.content。远程端点仅 HTTPS，允许本机 HTTP；禁止 URL 凭据、查询参数、片段及自动重定向。应用默认不传文本，独立显式授权后才启用。
+
+来源：
+- https://docs.rs/sherpa-onnx/1.13.8/sherpa_onnx/
+- https://github.com/k2-fsa/sherpa-onnx
+- https://developers.deepl.com/api-reference/translate
+- https://developers.deepl.com/docs/learning-how-tos/examples-and-guides/how-to-use-context-parameter
+- https://github.com/openai/openai-openapi

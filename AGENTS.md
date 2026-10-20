@@ -3,7 +3,7 @@
 ## 工作范围与顺序
 
 - 项目是 Rust + GPUI 原生实时字幕翻译应用；Linux / Wayland / PipeWire 优先，保留跨平台边界。
-- 原始需求见 `docs/development-plan.md`。按 M00 → M01 → M02 → M03 → M04 推进；M00、M01、M02 已完成，本轮实施 M03 ASR Provider；止于 M03；支持云端语音接口自带译文，不实施独立文字翻译。本地模型交给 M04，当前不保留本地后端入口与原生模型依赖。云端 ASR 仅在用户显式选择上传后启用。
+- 原始需求见 `docs/development-plan.md`。按 M00 → M01 → M02 → M03 → M04 推进；M00 至 M03 已完成工程实现，本轮实施 M04 本地 streaming ASR 与实时翻译；止于 M04。支持用户导入 sherpa-onnx streaming transducer 模型，增加独立 OpenAI-compatible / DeepL 文字翻译；不实施 M05 模型下载与本地翻译。云端 ASR 仅在用户显式选择上传后启用。
 - 每个里程碑开始先检查文件、Git 状态、工具链和依赖，列出简短清单。先调研和更新规范，再开发。
 - M00 仅建立最小可编译 Workspace、真实控制窗口、基础日志、文档与质量流程。不得提前实现音频、ASR、翻译或创建空壳 crate。
 - M01 实现 Wayland 字幕浮窗、mock 字幕、字幕状态和样式配置。状态独立于窗口生命周期；关闭控制窗口须保留恢复与退出入口。不得提前实现 M02 音频或真实云服务。
