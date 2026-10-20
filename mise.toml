@@ -21,6 +21,14 @@ run = "cargo run --locked -p subveil -- --demo"
 description = "Validate local PipeWire capture: optional seconds and sample rate"
 run = "cargo run --locked -p subveil-audio --example probe --"
 
+[tasks."asr:probe"]
+description = "Explicit ASR diagnostic; cloud requires --allow-upload"
+run = "timeout 90s cargo run --locked -p subveil-asr --example asr_probe --"
+
+[tasks."asr:check"]
+description = "Build, lint and test the optional local sherpa backend"
+run = ["cargo build --workspace --all-features --locked", "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings", "timeout 90s cargo test --workspace --all-features --locked"]
+
 [tasks.fmt]
 description = "Format Rust sources"
 run = "cargo fmt --all"
@@ -35,7 +43,7 @@ run = "cargo clippy --workspace --all-targets --locked -- -D warnings"
 
 [tasks.test]
 description = "Run workspace tests"
-run = "cargo test --workspace --locked"
+run = "timeout 90s cargo test --workspace --locked"
 
 [tasks.check]
 description = "Run all quality gates sequentially"

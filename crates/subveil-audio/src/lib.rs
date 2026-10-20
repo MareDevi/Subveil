@@ -15,6 +15,8 @@ use std::{
 mod linux;
 mod pcm;
 
+pub use pcm::{AudioFrame, FrameReceiver, FrameSender};
+
 /// Local audio status, independent of any GUI window.
 #[derive(Clone, Debug)]
 pub struct Snapshot {
@@ -74,6 +76,17 @@ impl Capture {
     /// Starts local capture at a caller-selected rate (8–192 kHz).
     /// Errors if unsupported or if the worker cannot be created.
     pub fn start(sample_rate: u32) -> anyhow::Result<Self> {
+        Self::start_inner(sample_rate, None)
+    }
+
+    /// Starts capture with a bounded, independent PCM consumer for recognition.
+    pub fn start_with_frames(sample_rate: u32) -> anyhow::Result<(Self, FrameReceiver)> {
+        let frames = FrameReceiver::new();
+        let capture = Self::start_inner(sample_rate, Some(frames.clone()))?;
+        Ok((capture, frames))
+    }
+
+    fn start_inner(sample_rate: u32, frames: Option<FrameReceiver>) -> anyhow::Result<Self> {
         anyhow::ensure!(
             (8_000..=192_000).contains(&sample_rate),
             "sample rate must be 8000..=192000 Hz"
@@ -98,7 +111,9 @@ impl Capture {
                         ..Snapshot::default()
                     };
                     while !worker_stop.load(Ordering::Relaxed) {
-                        if let Err(error) = linux::run(&worker_stop, &worker_snapshot, &mut stats) {
+                        if let Err(error) =
+                            linux::run(&worker_stop, &worker_snapshot, &mut stats, frames.as_ref())
+                        {
                             stats.status = format!("连接失败，1 秒后重试：{error:#}");
                             stats.device = None;
                             stats.rms = 0.;

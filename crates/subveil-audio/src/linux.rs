@@ -44,6 +44,7 @@ pub(crate) fn run(
     stop: &AtomicBool,
     shared: &Mutex<Snapshot>,
     stats: &mut Snapshot,
+    frames: Option<&crate::FrameReceiver>,
 ) -> anyhow::Result<()> {
     pw::init();
     let mainloop = pw::main_loop::MainLoopRc::new(None)?;
@@ -152,13 +153,14 @@ pub(crate) fn run(
             target = next;
         }
         stats.device = target.as_ref().map(|(_, _, name)| name.clone());
-        pcm.borrow_mut().drain(stats, stats.connections, &mut last);
+        pcm.borrow_mut()
+            .drain_to(stats, stats.connections, &mut last, frames);
         crate::expire_level(stats, last);
         stats.status = if active
             .as_ref()
             .is_some_and(|(_, stream)| matches!(stream.state(), pw::stream::StreamState::Streaming))
         {
-            "正在捕获系统输出（仅本机）"
+            "正在捕获系统输出"
         } else if target.is_some() {
             "等待 monitor 流连接/运行"
         } else {

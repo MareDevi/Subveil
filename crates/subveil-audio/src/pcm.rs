@@ -6,14 +6,82 @@ use std::time::Instant;
 const SAMPLES: usize = 2048;
 const CAPACITY: usize = 16;
 
-pub(crate) struct Block {
+/// Fixed-capacity mono PCM block with source continuity metadata.
+pub struct AudioFrame {
+    /// Storage; only the first `len` samples contain audio.
     pub samples: [f32; SAMPLES],
+    /// Number of valid samples (at most 2048).
     pub len: usize,
+    /// Capture stream incarnation; changes on device reconnect.
     pub generation: u64,
+    /// Monotonically increasing block sequence within a capture.
     pub sequence: u64,
+    /// Cumulative sample offset within a capture, including dropped audio.
     pub sample_offset: u64,
+    /// Monotonic callback receipt time, not hardware PTS.
     pub captured: Instant,
+    /// Mono sample rate in Hz.
     pub rate: u32,
+}
+
+type Block = AudioFrame;
+
+/// Bounded PCM handoff. Overflow discards oldest audio, never blocks capture.
+#[derive(Clone)]
+pub struct FrameReceiver {
+    queue: std::sync::Arc<ArrayQueue<AudioFrame>>,
+    dropped: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+/// Producer for a bounded mono PCM handoff, including synthetic offline tests.
+pub struct FrameSender(FrameReceiver);
+impl FrameSender {
+    /// Send without waiting; on overflow evict and count the oldest block.
+    pub fn push(&self, frame: AudioFrame) {
+        self.0.push(frame);
+    }
+}
+
+impl FrameReceiver {
+    /// Create an independent bounded PCM channel with capacity 16.
+    pub fn channel() -> (FrameSender, Self) {
+        let receiver = Self::new();
+        (FrameSender(receiver.clone()), receiver)
+    }
+
+    pub(crate) fn new() -> Self {
+        Self {
+            queue: std::sync::Arc::new(ArrayQueue::new(CAPACITY)),
+            dropped: Default::default(),
+        }
+    }
+
+    /// Takes the oldest available block without waiting.
+    pub fn pop(&self) -> Option<AudioFrame> {
+        self.queue.pop()
+    }
+
+    /// Number of blocks evicted by this handoff, independently of capture losses.
+    pub fn dropped_blocks(&self) -> u64 {
+        self.dropped.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Current queue depth, at most 16 blocks.
+    pub fn len(&self) -> usize {
+        self.queue.len()
+    }
+
+    /// Whether no block is ready.
+    pub fn is_empty(&self) -> bool {
+        self.queue.is_empty()
+    }
+
+    fn push(&self, frame: AudioFrame) {
+        if self.queue.force_push(frame).is_some() {
+            self.dropped
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
 }
 
 pub(crate) struct PcmQueue {
@@ -91,7 +159,18 @@ impl PcmQueue {
         }
     }
 
+    #[cfg(test)]
     pub fn drain(&mut self, stats: &mut Snapshot, generation: u64, last: &mut Instant) {
+        self.drain_to(stats, generation, last, None);
+    }
+
+    pub fn drain_to(
+        &mut self,
+        stats: &mut Snapshot,
+        generation: u64,
+        last: &mut Instant,
+        frames: Option<&FrameReceiver>,
+    ) {
         let mut energy = 0_f64;
         let mut count = 0;
         let mut peak = 0_f32;
@@ -114,6 +193,9 @@ impl PcmQueue {
                 peak = peak.max(sample.abs());
             }
             count += block.len;
+            if let Some(frames) = frames {
+                frames.push(block);
+            }
         }
         if count > 0 {
             stats.rms = (energy / count as f64).sqrt() as f32;
@@ -216,5 +298,37 @@ mod tests {
         let mut last = Instant::now();
         q.drain(&mut s, 1, &mut last);
         assert_eq!((s.samples, s.blocks, s.rms, s.silent), (2049, 2, 0., true));
+    }
+}
+
+#[cfg(test)]
+mod handoff_tests {
+    use super::*;
+    #[test]
+    fn forwarding_preserves_pcm_position_and_bounds_slow_consumer() {
+        let mut pcm = PcmQueue::new();
+        let (sender, frames) = FrameReceiver::channel();
+        let mut stats = Snapshot::default();
+        let mut last = Instant::now();
+        for _ in 0..20 {
+            pcm.push(&0.25_f32.to_le_bytes(), 1, 48_000);
+            pcm.drain_to(&mut stats, 1, &mut last, Some(&frames));
+        }
+        assert_eq!(
+            (frames.len(), frames.dropped_blocks(), stats.dropped_blocks),
+            (16, 4, 0)
+        );
+        let frame = frames.pop().unwrap_or_else(|| unreachable!("queued audio"));
+        assert_eq!(
+            (
+                frame.samples[0],
+                frame.sample_offset,
+                frame.sequence,
+                frame.generation
+            ),
+            (0.25, 4, 4, 1)
+        );
+        sender.push(frame);
+        assert_eq!(frames.len(), 16);
     }
 }
