@@ -565,7 +565,8 @@ ASR/翻译消费者落后时应记录事件，并采取合理的丢帧、重置�
 2. 首个可用云端 ASR。
 3. 真实 Partial/Final 处理。
 4. 基础 VAD/分段。
-5. 本地 sherpa-onnx Provider。
+5. 扩展阿里云、Google Gemini、火山引擎、腾讯云、百度、OpenAI、Azure OpenAI、xAI，以及自定义 DashScope / OpenAI Realtime 协议；显示接口自带译文。
+6. 本地 ASR 与模型加载移到 M04，本里程碑不引入模型运行库。
 
 要求重点测试日语与英语。
 
@@ -577,12 +578,14 @@ ASR/翻译消费者落后时应记录事件，并采取合理的丢帧、重置�
 - 断网、超时和服务异常可恢复。
 - 本地和云端 Provider 使用统一数据模型。
 
-## M04 — 实时翻译
+## M04 — 本地 ASR 与实时翻译
 
 目标：完整打通系统音频到双语字幕。
 
 任务：
 
+- 本地 sherpa-onnx streaming ASR、用户模型导入和加载验证。
+- 本地与云端识别使用统一字幕数据模型；不静默回退云端。
 - Translator Trait。
 - OpenAI-compatible Provider。
 - DeepL Provider。
