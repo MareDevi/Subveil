@@ -104,3 +104,10 @@ SPA chunk 按 offset / size / stride 校验，拒绝损坏标记与超过 256 Ki
 - 保持 tokio-tungstenite 0.28.0 与现有 GPUI 版本。新增 protobuf、安全 URL、HMAC、Base64 直接依赖；移除 sherpa-onnx 及其原生构建依赖。本地模型推迟至 M04，前期原生绑定探索不再作为当前实现或验收结论。
 
 音频回调继续只处理 PCM；后台识别线程驱动网络。初始化确认后才发送音频，各服务以规定包长节奏发送；不把积压瞬间灌入接口。原文与译文分别有界，译文带完整 SegmentKey；UI 只接受匹配 revision 的返回。返回语音始终丢弃，不播放形成采集反馈。
+
+
+## GPUI Kit 界面重构补充（2026-10-20）
+
+按用户指定的 GPUI Kit Design Guides / Coding Guides 与技能重构控制、样式预览、浮窗展示和恢复入口。Context7 返回的示例为 0.7；网站首页展示 0.7.3。通过 crates.io 与实际发布源码核对，采用兼容现有工程的 `gpui-kit =0.8.0`，保留 `gpui-pre =0.3.9` 和 `gpui-component 0.8.0`。应用只声明 Kit，一个 facade 提供框架、组件、平台与图标资源。依赖树确认只有一套 GPUI 类型。
+
+使用标准 TabBar、Select、RadioGroup、Switch、Button 和滚动条；主题来自 ActiveTheme，界面间距与字体使用 rem 辅助方法。用户配置的字幕颜色、字号以及窗口/Layer Shell 几何是明确的内容数据与平台边界，不跟随界面主题换色。字幕样式预览与浮窗共用 subtitle_panel。会话与识别生命周期仍由 Session 持有，UI 不创建服务或发起上传。详细设计与验收见 [ui-redesign.md](ui-redesign.md)。
