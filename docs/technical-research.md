@@ -70,3 +70,13 @@ M00 仅创建普通控制窗口。上述为源码能力确认，**不是浮窗�
 - 核心状态拒绝旧 session / revision 以及已过期或淘汰的段，mock 计时器使用单调时钟。窗口重建不重置字幕。
 - 配置使用 serde + TOML；原生文件读写在应用 storage 模块。用户显式保存时后台原子替换，加载错误持续展示，不自动覆盖坏配置。
 - M01 计划和验收详见 `docs/m01-plan.md` 与 `docs/m01-validation.md`。
+
+## M02 实施补充（2026-10-20）
+
+Context7 查询 `/git_gitlab_freedesktop_org/pipewire_pipewire-rs` 后核对 pipewire 0.10.1 发布源码的 audio-capture、registry、metadata 和 loop API。使用安全的 Loop::iterate 有限超时驱动专用线程，无需应用 unsafe。
+
+采用 PipeWire 内置 sinc 重采样：请求的流采样率与图采样率不同时自动转换，resample.quality=4；请求单声道交由原生混音。采样率是调用参数，不绑定未来模型为 16 kHz。不设置 node.force-rate 或修改系统输出音量。
+
+默认输出由 default metadata 的 default.audio.sink JSON 和 Audio/Sink registry 共同确定；stream.capture.sink=true、target.object=node.name、node.dont-fallback=true 防止误采麦克风。服务中断后重建 context/core，输出切换重建流。
+
+来源：[PipeWire 属性与重采样](https://docs.pipewire.org/page_man_pipewire-props_7.html)、[pipewire 0.10.1 发布源码](https://docs.rs/crate/pipewire/0.10.1/source/)。具体实现与验收见 M02 文档。
