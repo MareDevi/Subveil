@@ -1,7 +1,7 @@
 use gpui::{
     App, AppContext, Bounds, Context, Entity, IntoElement, ParentElement, Render, SharedString,
     Styled, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, div, prelude::*,
-    px, rgb, size,
+    px, relative, rgb, size,
 };
 use gpui_component::{Root, button::Button};
 use subveil_core::{config::DisplayMode, subtitle::TranslationState};
@@ -91,8 +91,8 @@ impl Render for ControlView {
             .bg(rgb(0x10151e))
             .text_color(rgb(0xe8edf5))
             .child(div().text_3xl().child("Subveil"))
-            .child("M01 · Wayland 字幕浮窗 · 模拟演示")
-            .child("不采集音频，不连接云端。此处文字均由内置样本生成。")
+            .child("M02 · 系统音频采集与 Wayland 字幕浮窗")
+            .child("音频仅本机处理，不保存、不上传。字幕仍为独立模拟样本；尚无真实识别。")
             .child(
                 row()
                     .child(button(
@@ -136,6 +136,18 @@ impl Render for ControlView {
                             .label("退出 Subveil")
                             .on_click(|_, _, cx| cx.quit()),
                     ),
+            )
+            .child(
+                div().flex().flex_col().gap_2().p_4().rounded_lg().bg(rgb(0x1b2432))
+                    .child(row()
+                        .child(button("audio-toggle", if session.audio_stopping { "正在停止…" } else if session.audio_active() { "停止音频采集" } else { "开始系统音频采集" }, &self.session, Session::toggle_audio))
+                        .child(button("audio-rate", format!("PCM {} Hz · 点击切换（停止时）", session.audio.sample_rate), &self.session, Session::cycle_audio_rate)))
+                    .child(session.audio.status.clone())
+                    .child(format!("默认输出：{} · 单声道 F32LE", session.audio.device.as_deref().unwrap_or("等待设备")))
+                    .child(div().h(px(8.)).rounded_lg().bg(rgb(0x334155))
+                        .child(div().h_full().w(relative(session.audio.peak)).max_w_full().bg(rgb(0x34d399))))
+                    .child(format!("RMS {:.1} dBFS · 峰值 {:.1} dBFS · {}", 20. * session.audio.rms.max(0.000001).log10(), 20. * session.audio.peak.max(0.000001).log10(), if session.audio.silent { "静音" } else { "有声" }))
+                    .child(format!("PCM 块 {} · 样本 {} · 丢块 {} / 丢样本 {} · 无效块 {} · 连接 {}", session.audio.blocks, session.audio.samples, session.audio.dropped_blocks, session.audio.dropped_samples, session.audio.invalid_chunks, session.audio.connections))
             )
             .child(div().text_sm().child(session.message.clone()))
             .children(session.config_error.as_ref().map(|error| {
@@ -285,7 +297,7 @@ impl Render for ControlView {
                 )))
             .child(history)
             .child(div().text_sm().text_color(rgb(0x94a3b8)).child(
-                "关闭控制窗口会保留演示，并打开会话恢复入口。关闭恢复入口或点击退出可结束程序。",
+                "关闭控制窗口会保留采集或演示，并打开会话恢复入口。关闭恢复入口或点击退出可结束程序。",
             ))
     }
 }

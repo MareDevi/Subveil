@@ -21,6 +21,9 @@ pub struct Session {
     pub config_error: Option<String>,
     pub config_path: Option<PathBuf>,
     pub saving: bool,
+    pub audio: subveil_audio::Snapshot,
+    audio_capture: Option<subveil_audio::Capture>,
+    pub audio_stopping: bool,
     overlay: Option<WindowHandle<OverlayView>>,
     overlay_requested: bool,
     control: Option<WindowHandle<Root>>,
@@ -56,6 +59,9 @@ impl Session {
             config_error,
             config_path,
             saving: false,
+            audio: subveil_audio::Snapshot::default(),
+            audio_capture: None,
+            audio_stopping: false,
             overlay: None,
             overlay_requested: false,
             control: None,
@@ -71,6 +77,20 @@ impl Session {
         let now = Instant::now();
         let now_ms = self.started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
         let mut changed = self.subtitles.expire(now_ms);
+        if let Some(capture) = &self.audio_capture {
+            if let Some(snapshot) = capture.snapshot() {
+                self.audio = snapshot;
+                changed = true;
+            }
+            if capture.is_finished() {
+                if !self.audio_stopping {
+                    self.audio.status = "音频线程意外退出；请重新开始采集".into();
+                }
+                self.audio_capture = None;
+                self.audio_stopping = false;
+                changed = true;
+            }
+        }
         if self.running && now >= self.next_tick {
             changed |= mock::advance(&mut self.subtitles, self.tick, now_ms);
             self.tick = self.tick.saturating_add(1);
@@ -102,6 +122,42 @@ impl Session {
             .reset(self.subtitles.session_id().saturating_add(1));
         self.message = "演示已停止，字幕已清空。".into();
         cx.notify();
+    }
+
+    pub fn audio_active(&self) -> bool {
+        self.audio_capture.is_some()
+    }
+
+    pub fn toggle_audio(&mut self, cx: &mut Context<Self>) {
+        if let Some(capture) = &self.audio_capture {
+            capture.stop();
+            self.audio_stopping = true;
+            self.audio.status = "正在停止采集…".into();
+        } else {
+            match subveil_audio::Capture::start(self.audio.sample_rate) {
+                Ok(capture) => {
+                    self.audio = subveil_audio::Snapshot {
+                        sample_rate: self.audio.sample_rate,
+                        status: "连接 PipeWire…".into(),
+                        ..Default::default()
+                    };
+                    self.audio_capture = Some(capture);
+                }
+                Err(error) => self.audio.status = format!("无法开始采集：{error:#}"),
+            }
+        }
+        cx.notify();
+    }
+
+    pub fn cycle_audio_rate(&mut self, cx: &mut Context<Self>) {
+        if self.audio_capture.is_none() {
+            self.audio.sample_rate = match self.audio.sample_rate {
+                48_000 => 16_000,
+                16_000 => 24_000,
+                _ => 48_000,
+            };
+            cx.notify();
+        }
     }
 
     pub fn overlay_visible(&self) -> bool {
@@ -245,7 +301,7 @@ impl Session {
     pub fn window_closed(&mut self, id: WindowId, cx: &mut Context<Self>) {
         if self.control.is_some_and(|handle| handle.window_id() == id) {
             self.control = None;
-            if self.running || self.overlay_requested {
+            if self.running || self.overlay_requested || self.audio_capture.is_some() {
                 let session = cx.entity();
                 cx.defer(move |cx| match ui::open_recovery(session.clone(), cx) {
                     Ok(handle) => session.update(cx, |session, _| session.recovery = Some(handle)),
