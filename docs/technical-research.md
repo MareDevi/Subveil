@@ -90,3 +90,13 @@ SPA chunk 按 offset / size / stride 校验，拒绝损坏标记与超过 256 Ki
 队列使用 crossbeam-queue ArrayQueue 预分配 16×2048 个样本，force_push 淘汰最旧数据；250 ms 过期块和流替换待消费块亦计入丢弃。metadata listener 使用 Weak 引用，移除对象时释放 listener/proxy，避免服务重连时形成引用环。stream listener 先于 stream 释放，registry 使用持有 CoreRc 的 RegistryRc。
 
 依据：[Crossbeam ArrayQueue 源码](https://github.com/crossbeam-rs/crossbeam/blob/master/crossbeam-queue/src/array_queue.rs)、本机 SPA buffer.h 与 libspa 0.10.1 buffer API。Context7 已先查询 `/crossbeam-rs/crossbeam`，实际依赖固定在 Cargo.lock。
+
+## M03 调研（2026-10-20）
+
+Context7 先 resolve 再 query：`/websites/developers_deepgram`、`/websites/rs_sherpa-onnx_sherpa_onnx`、`/snapview/tokio-tungstenite`。核对官方发布源码，保留已有 GPUI 类型来源。
+
+Deepgram Listen v1 的 nova-3 支持 en/ja；WebSocket 采用 Authorization: Token、linear16 单声道、显式 sample_rate、interim_results=true。is_final 稳定当前识别范围，speech_final 表示端点，二者不能混同。超时/断开重连后丢弃旧音频，不回放积压。来源：https://developers.deepgram.com/docs/models-languages-overview 、https://developers.deepgram.com/docs/understand-endpointing-interim-results 、https://developers.deepgram.com/docs/audio-keep-alive 。
+
+官方 sherpa-onnx 1.13.8 发布包提供 OnlineRecognizer::create/create_stream、accept_waveform、is_ready/decode、get_result/is_endpoint/reset。默认静态绑定的 sys build script 可下载原生运行库；可用 SHERPA_ONNX_LIB_DIR 提供预安装库。本项目将其放入可选特性，不自动下载模型；模型来源、许可证和哈希由用户在部署时确认。来源：https://docs.rs/crate/sherpa-onnx/1.13.8/source/ 、https://docs.rs/crate/sherpa-onnx-sys/1.13.8/source/build.rs 。
+
+Tokio WebSocket 由后台专用 runtime 驱动；握手、读写与取消均需有时限，限制服务响应大小。上游文档：https://github.com/snapview/tokio-tungstenite 。
