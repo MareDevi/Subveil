@@ -80,3 +80,13 @@ Context7 查询 `/git_gitlab_freedesktop_org/pipewire_pipewire-rs` 后核对 pip
 默认输出由 default metadata 的 default.audio.sink JSON 和 Audio/Sink registry 共同确定；stream.capture.sink=true、target.object=node.name、node.dont-fallback=true 防止误采麦克风。服务中断后重建 context/core，输出切换重建流。
 
 来源：[PipeWire 属性与重采样](https://docs.pipewire.org/page_man_pipewire-props_7.html)、[pipewire 0.10.1 发布源码](https://docs.rs/crate/pipewire/0.10.1/source/)。具体实现与验收见 M02 文档。
+
+### M02 回调与缓冲约束
+
+应用不设置 RT_PROCESS：process listener 在独立 PipeWire main loop 线程调度，避免将 Rc/RefCell 用户数据交给实时 DSP 线程。回调仅校验并复制 PCM；同一后台线程在 iterate 返回后消费固定容量队列和计算电平。GPUI 以 try_lock 读取聚合快照，不等待音频线程。
+
+SPA chunk 按 offset / size / stride 校验，拒绝损坏标记与超过 256 KiB 的缓冲；EMPTY 标记使用等时长零样本，避免读取遗留数据。F32LE 用字节转换，无 unsafe cast。NaN/Inf 置零，幅值约束到 [-1, 1]。PCM 块携带连接代次、递增序号、累计样本偏移、采样率与单调接收时间；此时间不是设备硬件 PTS，M03 对齐时必须保留区别。
+
+队列使用 crossbeam-queue ArrayQueue 预分配 16×2048 个样本，force_push 淘汰最旧数据；250 ms 过期块和流替换待消费块亦计入丢弃。metadata listener 使用 Weak 引用，移除对象时释放 listener/proxy，避免服务重连时形成引用环。stream listener 先于 stream 释放，registry 使用持有 CoreRc 的 RegistryRc。
+
+依据：[Crossbeam ArrayQueue 源码](https://github.com/crossbeam-rs/crossbeam/blob/master/crossbeam-queue/src/array_queue.rs)、本机 SPA buffer.h 与 libspa 0.10.1 buffer API。Context7 已先查询 `/crossbeam-rs/crossbeam`，实际依赖固定在 Cargo.lock。
