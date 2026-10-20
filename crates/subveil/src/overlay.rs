@@ -1,4 +1,4 @@
-use gpui::{
+use gpui_kit::{
     App, Context, Entity, IntoElement, Render, SharedString, Window, WindowHandle, div, prelude::*,
     px, rgb,
 };
@@ -33,58 +33,74 @@ impl Render for OverlayView {
         let Some(subtitle) = session.subtitles.current() else {
             return root;
         };
-        let mut background = gpui::Hsla::from(rgb(settings.background_color));
-        background.a = settings.background_opacity;
-        let mut panel = div()
-            .w_full()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .p_4()
-            .rounded_lg()
-            .bg(background)
-            .font_family(SharedString::from(settings.font_family.clone()))
-            .text_center()
-            .overflow_hidden();
-        if settings.display_mode != DisplayMode::Translation {
-            panel = panel.child(
-                div()
-                    .text_size(px(settings.font_size * settings.source_ratio))
-                    .line_height(gpui::relative(1.4))
-                    .text_color(rgb(settings.source_color))
-                    .line_clamp(settings.max_lines)
-                    .text_ellipsis()
-                    .child(subtitle.transcript.text.clone()),
-            );
-        }
-        if settings.display_mode != DisplayMode::Source {
-            let translation = match &subtitle.translation {
-                TranslationState::Complete(text) | TranslationState::Streaming(text) => {
-                    text.as_str()
+        let translation = match &subtitle.translation {
+            TranslationState::Complete(text) | TranslationState::Streaming(text) => text.as_str(),
+            TranslationState::Pending => "正在生成译文…",
+            TranslationState::Failed(_) => "翻译失败",
+            TranslationState::NotRequested => {
+                if subtitle.is_final {
+                    ""
+                } else {
+                    "正在识别…"
                 }
-                TranslationState::Pending => "正在生成译文…",
-                TranslationState::Failed(_) => "翻译失败",
-                TranslationState::NotRequested => {
-                    if subtitle.is_final {
-                        ""
-                    } else {
-                        "正在识别…"
-                    }
-                }
-            };
-            panel = panel.child(
-                div()
-                    .text_size(px(settings.font_size))
-                    .line_height(gpui::relative(1.4))
-                    .text_color(rgb(settings.translation_color))
-                    .line_clamp(settings.max_lines)
-                    .text_ellipsis()
-                    .child(translation.to_owned()),
-            );
-        }
-        root = root.child(panel);
+            }
+        };
+        root = root.child(subtitle_panel(
+            settings,
+            &subtitle.transcript.text,
+            translation,
+            cx,
+        ));
         root
     }
+}
+
+/// The overlay and style preview share user-owned text colors and logical-pixel typography.
+/// These are subtitle content settings, deliberately independent of application theme/zoom.
+pub(crate) fn subtitle_panel(
+    settings: &OverlaySettings,
+    source: &str,
+    translation: &str,
+    cx: &App,
+) -> gpui_kit::Div {
+    use gpui_kit::component::ActiveTheme;
+
+    let mut background = gpui_kit::Hsla::from(rgb(settings.background_color));
+    background.a = settings.background_opacity;
+    let mut panel = div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .p_4()
+        .rounded(cx.theme().radius)
+        .bg(background)
+        .font_family(SharedString::from(settings.font_family.clone()))
+        .text_center()
+        .overflow_hidden();
+    if settings.display_mode != DisplayMode::Translation {
+        panel = panel.child(
+            div()
+                .text_size(px(settings.font_size * settings.source_ratio))
+                .line_height(gpui_kit::relative(1.4))
+                .text_color(rgb(settings.source_color))
+                .line_clamp(settings.max_lines)
+                .text_ellipsis()
+                .child(source.to_owned()),
+        );
+    }
+    if settings.display_mode != DisplayMode::Source {
+        panel = panel.child(
+            div()
+                .text_size(px(settings.font_size))
+                .line_height(gpui_kit::relative(1.4))
+                .text_color(rgb(settings.translation_color))
+                .line_clamp(settings.max_lines)
+                .text_ellipsis()
+                .child(translation.to_owned()),
+        );
+    }
+    panel
 }
 
 #[cfg(target_os = "linux")]
@@ -94,7 +110,7 @@ pub fn open(
     cx: &mut App,
 ) -> anyhow::Result<WindowHandle<OverlayView>> {
     use anyhow::{Context as _, ensure};
-    use gpui::{
+    use gpui_kit::{
         AppContext, Bounds, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions,
         layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions},
         point, size,
@@ -138,7 +154,7 @@ pub fn open(
         .min(f32::from(bounds.size.height) - margin - 16.)
         .max(1.);
     cx.open_window(
-        gpui::WindowOptions {
+        gpui_kit::WindowOptions {
             titlebar: None,
             focus: false,
             is_movable: false,

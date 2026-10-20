@@ -7,7 +7,7 @@ mod ui;
 use std::{env, path::PathBuf};
 
 use anyhow::{Context as _, bail};
-use gpui::{App, AppContext};
+use gpui_kit::{App, AppContext};
 use session::Session;
 use subveil_core::config::OverlaySettings;
 use tracing_subscriber::EnvFilter;
@@ -73,20 +73,23 @@ fn main() -> anyhow::Result<()> {
         Err(error) => (None, OverlaySettings::default(), Some(error.to_string())),
     };
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "starting Subveil");
-    gpui_platform::application().run(move |cx: &mut App| {
-        gpui_component::init(cx);
-        let session = cx.new(|cx| Session::new(settings, config_path, config_error, cx));
-        let observer = session.clone();
-        cx.on_window_closed(move |cx, id| {
-            observer.update(cx, |session, cx| session.window_closed(id, cx))
-        })
-        .detach();
-        session.update(cx, |session, cx| {
-            session.open_control(cx);
-            if arguments.demo {
-                session.start(cx);
-            }
+    gpui_kit::application()
+        .with_assets(gpui_kit::assets::Assets)
+        .run(move |cx: &mut App| {
+            gpui_kit::init(cx);
+            ui::init(cx);
+            let session = cx.new(|cx| Session::new(settings, config_path, config_error, cx));
+            let observer = session.clone();
+            cx.on_window_closed(move |cx, id| {
+                observer.update(cx, |session, cx| session.window_closed(id, cx))
+            })
+            .detach();
+            session.update(cx, |session, cx| {
+                session.open_control(cx);
+                if arguments.demo {
+                    session.start(cx);
+                }
+            });
         });
-    });
     Ok(())
 }

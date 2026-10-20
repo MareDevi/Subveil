@@ -3,8 +3,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gpui::{Context, Task, WindowHandle, WindowId};
-use gpui_component::Root;
+use gpui_kit::component::Root;
+use gpui_kit::{Context, Task, WindowHandle, WindowId};
 use subveil_core::{config::OverlaySettings, subtitle::SubtitleState};
 
 use crate::{
