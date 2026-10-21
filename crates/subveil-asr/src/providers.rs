@@ -32,6 +32,18 @@ pub enum Provider {
     CustomOpenAi,
 }
 impl Provider {
+    /// Language hints implemented and admitted by this protocol adapter.
+    /// This is deliberately narrower than unverified vendor-wide marketing lists.
+    pub fn source_languages(self) -> &'static [&'static str] {
+        match self {
+            Self::Mock => &["en", "ja"],
+            _ => &["en", "ja", "zh"],
+        }
+    }
+    /// Translation targets admitted by the current application adapters.
+    pub fn target_languages(self) -> &'static [&'static str] {
+        &["zh", "en", "ja"]
+    }
     /// Ordered catalog used by both GUI and headless diagnostics.
     pub const ALL: [Self; 13] = [
         Self::Mock,

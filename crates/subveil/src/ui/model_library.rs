@@ -66,46 +66,15 @@ impl ControlView {
             || session.local_models.downloading()
             || models.downloading()
             || session.restoring_local;
-        let compute = match session.compute {
-            subveil_translate::Compute::Cpu => "CPU".to_owned(),
-            subveil_translate::Compute::Gpu(index) => session
-                .gpu_devices
-                .iter()
-                .find(|d| d.index == index)
-                .map(|d| d.name.clone())
-                .unwrap_or_else(|| "GPU 不可用".into()),
-        };
         let mut view = column()
             .gap_2()
-            .child(
-                button(
-                    "translation-compute",
-                    format!("翻译运行设备：{compute}"),
-                    &self.session,
-                    Session::cycle_compute,
-                )
-                .disabled(busy || session.gpu_devices.is_empty()),
-            )
+            .child(self.render_choice(Choice::Compute, "翻译运行设备", busy, cx))
             .child(help(session.gpu_status.clone(), cx))
             .child(help(
                 "翻译支持 CPU / Vulkan；Whisper 可选 CPU / CUDA。切换设备前请停止识别。",
                 cx,
             ));
-        view = view.child(
-            button(
-                "choose-translation-model",
-                format!(
-                    "翻译模型：{}",
-                    models
-                        .current()
-                        .map(|m| m.name.as_str())
-                        .unwrap_or("暂无模型")
-                ),
-                &self.session,
-                Session::cycle_translation_model,
-            )
-            .disabled(busy),
-        );
+        view = view.child(self.render_choice(Choice::TranslationModel, "翻译模型", busy, cx));
         if let Some(model) = models.current() {
             view = view
                 .child(help(
@@ -271,13 +240,9 @@ impl ControlView {
             .is_some_and(|m| m.kind == subveil_asr::ModelKind::Whisper)
             || session.local_kind == subveil_asr::ModelKind::Whisper
         {
-            let device = match session.asr_config.local_compute {
-                subveil_translate::Compute::Cpu => "CPU",
-                _ => "NVIDIA CUDA0",
-            };
             view = view
-                .child(field("语音识别设备", button("asr-compute", device, &self.session, Session::cycle_asr_compute).disabled(busy), cx))
-                .child(field("Whisper 分块", button("whisper-block", format!("{} 秒", session.asr_config.whisper_block_ms / 1000), &self.session, Session::cycle_whisper_block).disabled(busy), cx))
+                .child(self.render_choice(Choice::AsrCompute, "语音识别设备", busy, cx))
+                .child(self.render_choice(Choice::WhisperBlock, "Whisper 分块", busy, cx))
                 .child(help("短块更快显示字幕，可能切断词句；长块保留更多上下文。CUDA 需要专用构建，失败不会自动回退。", cx));
         }
         view

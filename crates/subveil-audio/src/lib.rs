@@ -40,6 +40,10 @@ pub struct Source {
     pub label: String,
 }
 impl Source {
+    /// Compare capture identity independently of mutable application titles.
+    pub fn same_lifetime(&self, other: &Self) -> bool {
+        self.server == other.server && self.serial == other.serial && self.kind == other.kind
+    }
     /// Unique picker label, even when two tabs have the same application name.
     pub fn picker_label(&self) -> String {
         format!("{} · {}", self.label, self.serial)

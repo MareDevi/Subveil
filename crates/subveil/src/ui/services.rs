@@ -35,6 +35,11 @@ impl ControlView {
             || session.cloud_busy;
         column()
             .child(heading("语音服务", "选择识别服务与文字翻译；本地识别不上传音频。", cx))
+            .child(self.render_choice(Choice::Profile,"服务配置",busy,cx))
+            .child(field("配置名称",Input::new(&self.profile_name).disabled(busy),cx))
+            .child(Button::new("save-profile").label("保存为配置").disabled(busy).on_click(cx.listener(|s,_,_,cx| {
+                let name=s.profile_name.read(cx).value().to_string();s.session.update(cx,|session,cx|session.save_named_profile(&name,cx));
+            })))
             .child(field("离线模式", Switch::new("offline-mode").label("仅使用本地模型")
                 .checked(session.offline).disabled(busy)
                 .on_click({ let session = self.session.clone(); move |_, _, cx| {
@@ -51,11 +56,8 @@ impl ControlView {
                 .child(button("discover-cloud-models", "查询兼容模型", &self.session, Session::discover_models)
                     .disabled(busy || session.offline || !subveil_asr::discovery::supported(provider)).loading(session.cloud_busy))
                 .child(help(if subveil_asr::discovery::supported(provider) { session.cloud_status.clone() } else { "此协议使用官方固定项；Azure 与自定义服务请填写部署名或模型 ID。".into() }, cx)))
-            .child(field("语言", row()
-                .child(button("asr-language", format!("源语种：{}", if provider.automatic_language() { "自动识别" } else { &session.asr_config.language }), &self.session, Session::cycle_asr_language)
-                    .disabled(busy || provider.automatic_language() || (provider == subveil_asr::Provider::Local && session.local_languages.len() <= 1)))
-                .child(button("asr-target", format!("目标语种：{}", session.asr_config.target_language), &self.session, Session::cycle_target_language)
-                    .disabled(busy)), cx))
+            .child(self.render_choice(Choice::SourceLanguage, "源语种", busy || provider.automatic_language(), cx))
+            .child(self.render_choice(Choice::TargetLanguage, "目标语种", busy, cx))
             .child(column().gap_2()
                 .child(div().text_base().child(if !provider.is_cloud() { "本地处理 · 不上传音频" } else { "开始后将上传系统音频" }))
                 .child(help(format!("音频目标：{}", session.asr_config.destination()), cx))
@@ -78,7 +80,7 @@ impl ControlView {
                 Button::new("open-asr-models").label("选择或安装识别模型…").icon(IconName::HardDrive)
                     .on_click(cx.listener(|s, _, window, cx| s.select_page(4, window, cx)))))
             .child(section("文字翻译", "独立翻译原文，或使用语音服务返回的译文。", cx))
-            .child(field("文字翻译", button("translation-provider", format!("翻译服务：{}", session.translation_provider.name()), &self.session, Session::cycle_translation).disabled(busy || provider.translates()), cx))
+            .child(self.render_choice(Choice::Translation, "文字翻译", busy || provider.translates(), cx))
             .when(session.translation_provider == subveil_translate::Provider::Local, |view| view.child(
                 Button::new("open-translation-models").label("配置本地翻译模型…").icon(IconName::Cpu)
                     .on_click(cx.listener(|s, _, window, cx| s.select_page(4, window, cx)))))
@@ -98,6 +100,7 @@ impl ControlView {
             .child(help(session.translation_status.clone(), cx))
             .child(help(format!("翻译队列丢弃：{}", session.translation_dropped), cx))
             .child(section("云服务凭据", "输入即用于当前进程；保存与读取均使用系统密钥环，不写入设置文件。", cx))
+            .child(help(session.credentials_availability.clone(),cx))
             .child(row()
                 .child(button("save-credentials", "保存到系统密钥环", &self.session, Session::store_credentials).disabled(busy))
                 .child(button("load-credentials", "读取系统凭据", &self.session, Session::load_credentials).disabled(busy))

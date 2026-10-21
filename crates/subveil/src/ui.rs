@@ -4,6 +4,8 @@ mod live;
 mod model_library;
 mod service_fields;
 mod services;
+#[cfg(test)]
+mod tests;
 
 use gpui_kit::component::{
     ActiveTheme, Disableable, Icon, IconName, IndexPath, Root, Sizable, Theme, ThemeMode,
@@ -25,7 +27,13 @@ use gpui_kit::{
 };
 use subveil_core::{config::DisplayMode, subtitle::TranslationState};
 
+use crate::session::Choice;
 use crate::{overlay, session::Session};
+struct ChoiceView {
+    kind: Choice,
+    items: Vec<SharedString>,
+    state: Entity<SelectState<Vec<SharedString>>>,
+}
 
 // Commands never start cloud transmission. Consent remains on the explicit service button.
 gpui_kit::actions!(
@@ -134,6 +142,8 @@ fn section(title: &'static str, description: &'static str, cx: &App) -> gpui_kit
 }
 
 pub struct ControlView {
+    profile_name: Entity<InputState>,
+    choices: Vec<ChoiceView>,
     audio_source: Entity<SelectState<Vec<SharedString>>>,
     audio_source_items: Vec<SharedString>,
     session: Entity<Session>,
@@ -153,8 +163,53 @@ pub struct ControlView {
 }
 
 impl ControlView {
+    fn render_choice(
+        &self,
+        kind: Choice,
+        label: &'static str,
+        disabled: bool,
+        cx: &App,
+    ) -> gpui_kit::Div {
+        if let Some(choice) = self.choices.iter().find(|c| c.kind == kind) {
+            field(
+                label,
+                Select::new(&choice.state)
+                    .w_full()
+                    .accessibility_label(label)
+                    .disabled(disabled || choice.items.is_empty()),
+                cx,
+            )
+        } else {
+            help("选择器暂不可用", cx)
+        }
+    }
     fn new(session: Entity<Session>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let profile_name =
+            cx.new(|cx| InputState::new(window, cx).placeholder("为当前服务配置命名"));
         let current = session.read(cx).asr_config.provider;
+        let mut choices = Vec::new();
+        let mut choice_subscriptions = Vec::new();
+        for kind in Choice::ALL {
+            let items: Vec<_> = session
+                .read(cx)
+                .choice_options(kind)
+                .into_iter()
+                .map(SharedString::from)
+                .collect();
+            let selected = SharedString::from(session.read(cx).choice_value(kind));
+            let index = items
+                .iter()
+                .position(|v| *v == selected)
+                .map(IndexPath::new);
+            let state = cx.new(|cx| SelectState::new(items.clone(), index, window, cx));
+            let owner = session.clone();
+            choice_subscriptions.push(cx.subscribe(&state, move |_, _, event, cx| {
+                if let SelectEvent::Confirm(Some(value)) = event {
+                    owner.update(cx, |s, cx| s.select_choice(kind, value.as_ref(), cx));
+                }
+            }));
+            choices.push(ChoiceView { kind, items, state });
+        }
         let audio_source_items: Vec<_> = session
             .read(cx)
             .source_labels()
@@ -325,6 +380,26 @@ impl ControlView {
             },
         );
         let observed = cx.observe_in(&session, window, |this, session, window, cx| {
+            for choice in &mut this.choices {
+                let items: Vec<_> = session
+                    .read(cx)
+                    .choice_options(choice.kind)
+                    .into_iter()
+                    .map(SharedString::from)
+                    .collect();
+                if items != choice.items {
+                    choice.items = items.clone();
+                    choice
+                        .state
+                        .update(cx, |s, cx| s.set_items(items, window, cx));
+                }
+                let value = SharedString::from(session.read(cx).choice_value(choice.kind));
+                if choice.state.read(cx).selected_value() != Some(&value) {
+                    choice
+                        .state
+                        .update(cx, |s, cx| s.set_selected_value(&value, window, cx));
+                }
+            }
             let sources: Vec<_> = session
                 .read(cx)
                 .source_labels()
@@ -426,8 +501,11 @@ impl ControlView {
             cloud_selected,
             text_selected,
         ]);
+        input_subscriptions.extend(choice_subscriptions);
         let credentials_generation = session.read(cx).credentials_generation;
         Self {
+            profile_name,
+            choices,
             audio_source,
             audio_source_items,
             session,

@@ -12,6 +12,9 @@ use crate::{
     overlay::{self, OverlayView},
     storage, ui,
 };
+mod configuration;
+mod profiles;
+pub(crate) use configuration::Choice;
 
 pub struct Session {
     pub subtitles: SubtitleState,
@@ -38,6 +41,10 @@ pub struct Session {
     pub credentials_busy: bool,
     pub credentials_generation: u64,
     pub credentials_status: String,
+    pub credentials_availability: String,
+    pub profiles: Vec<storage::ServiceProfile>,
+    pub selected_profile: u32,
+    profile_secrets: std::collections::BTreeMap<u32, subveil_core::services::ServiceSettings>,
     pub asr_stopping: bool,
     translation: Option<subveil_translate::Translation>,
     pub translation_provider: subveil_translate::Provider,
@@ -153,6 +160,17 @@ impl Session {
         cx: &mut Context<Self>,
     ) -> Self {
         cx.spawn(async move |owner, cx| {
+            let status = cx
+                .background_executor()
+                .spawn(async { crate::credentials::availability() })
+                .await;
+            let _ = owner.update(cx, |s: &mut Self, cx| {
+                s.credentials_availability = status;
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.spawn(async move |owner, cx| {
             let _ = owner.update(cx, |s: &mut Self, cx| s.refresh_audio_sources(cx));
         })
         .detach();
@@ -206,6 +224,17 @@ impl Session {
                 }
                 match preferences {
                     Ok(Some(preferences)) => {
+                        if let Some(source) = &preferences.capture_source
+                            && let Ok(source) = source.source()
+                        {
+                            session.capture_target = subveil_audio::CaptureTarget::Node(source);
+                        }
+                        let has_profiles = !preferences.profiles.is_empty();
+                        if has_profiles {
+                            session.profiles = preferences.profiles;
+                            session.selected_profile = preferences.selected_profile;
+                            session.restore_profile_selection();
+                        }
                         session.asr_config.vad_model = preferences.vad_model;
                         session.incremental_translation = preferences.incremental_translation;
                         session.asr_config.local_compute = if preferences.asr_cuda {
@@ -230,11 +259,15 @@ impl Session {
                                         "上次选择的识别模型不可用；请重新安装或导入".into()
                                 }
                             }
-                            session.asr_config.provider = subveil_asr::Provider::Local;
+                            if !has_profiles || preferences.offline {
+                                session.asr_config.provider = subveil_asr::Provider::Local;
+                            }
                         }
                         session.translation_model = preferences.translation_model;
                         session.sync_translation_selection();
-                        if session.translation_model.is_some() || preferences.offline {
+                        if (!has_profiles && session.translation_model.is_some())
+                            || preferences.offline
+                        {
                             session.translation_provider = subveil_translate::Provider::Local;
                         }
                         if session.local_languages.contains(&preferences.language) {
@@ -272,6 +305,15 @@ impl Session {
             });
         })
         .detach();
+        Self::initial(settings, config_path, config_error, timer)
+    }
+
+    pub(crate) fn initial(
+        settings: OverlaySettings,
+        config_path: Option<PathBuf>,
+        config_error: Option<String>,
+        timer: Task<()>,
+    ) -> Self {
         Self {
             subtitles: SubtitleState::new(1, settings.history_limit, settings.ttl_ms),
             settings,
@@ -299,6 +341,10 @@ impl Session {
             credentials_busy: false,
             credentials_generation: 0,
             credentials_status: "凭据仅保留在内存；可选择保存到系统密钥环".into(),
+            credentials_availability: "正在检查系统凭据工具…".into(),
+            profiles: vec![storage::ServiceProfile::default()],
+            selected_profile: 0,
+            profile_secrets: Default::default(),
             asr: subveil_asr::Snapshot {
                 status: "尚未启动识别".into(),
                 ..Default::default()
@@ -799,6 +845,7 @@ impl Session {
             return;
         }
         let settings = self.asr_config.services.clone().unwrap_or_default();
+        let profile = self.selected_profile;
         self.credentials_busy = true;
         self.credentials_status = "正在访问系统密钥环…".into();
         cx.notify();
@@ -807,9 +854,9 @@ impl Session {
                 .background_executor()
                 .spawn(async move {
                     match action {
-                        0 => crate::credentials::save(&settings).map(|()| None),
-                        1 => crate::credentials::load().map(Some),
-                        _ => crate::credentials::clear().map(|()| Some(Default::default())),
+                        0 => crate::credentials::save(&settings, profile).map(|()| None),
+                        1 => crate::credentials::load(profile).map(Some),
+                        _ => crate::credentials::clear(profile).map(|()| Some(Default::default())),
                     }
                 })
                 .await;
@@ -844,44 +891,6 @@ impl Session {
             });
         })
         .detach();
-    }
-
-    pub fn cycle_target_language(&mut self, cx: &mut Context<Self>) {
-        if !self.asr_active() {
-            self.asr_config.target_language = match self.asr_config.target_language.as_str() {
-                "zh" => "en",
-                "en" => "ja",
-                _ => "zh",
-            }
-            .into();
-            cx.notify();
-        }
-    }
-
-    pub fn cycle_asr_language(&mut self, cx: &mut Context<Self>) {
-        if !self.asr_active() && !self.local_models.downloading() {
-            if self.asr_config.provider == subveil_asr::Provider::Local {
-                if let Some(index) = self
-                    .local_languages
-                    .iter()
-                    .position(|lang| *lang == self.asr_config.language)
-                {
-                    let next = (index + 1) % self.local_languages.len();
-                    self.asr_config
-                        .language
-                        .clone_from(&self.local_languages[next]);
-                    self.local_language = Some(self.asr_config.language.clone());
-                }
-            } else {
-                self.asr_config.language = if self.asr_config.language == "en" {
-                    "ja"
-                } else {
-                    "en"
-                }
-                .into();
-            }
-            cx.notify();
-        }
     }
 
     pub fn toggle_asr(&mut self, cx: &mut Context<Self>) {
@@ -1044,30 +1053,6 @@ impl Session {
         }
     }
 
-    pub fn cycle_translation(&mut self, cx: &mut Context<Self>) {
-        if self.asr_active() {
-            return;
-        }
-        self.translation_provider = match self.translation_provider {
-            subveil_translate::Provider::Disabled => subveil_translate::Provider::Local,
-            subveil_translate::Provider::Local if self.offline => {
-                subveil_translate::Provider::Disabled
-            }
-            subveil_translate::Provider::Local => subveil_translate::Provider::OpenAi,
-            subveil_translate::Provider::OpenAi => subveil_translate::Provider::DeepL,
-            subveil_translate::Provider::DeepL => subveil_translate::Provider::Disabled,
-        };
-        self.allow_text_upload = false;
-        self.translation_status =
-            if self.translation_provider == subveil_translate::Provider::Local {
-                "本地翻译不上传文本；请安装或导入翻译模型"
-            } else {
-                "切换服务后需要重新授权文本上传"
-            }
-            .into();
-        cx.notify();
-    }
-
     pub fn consent_text_upload(&mut self, cx: &mut Context<Self>) {
         if !self.asr_active()
             && !self.offline
@@ -1199,18 +1184,6 @@ impl Session {
             self.translation_models.selected = index;
         }
     }
-    pub fn cycle_translation_model(&mut self, cx: &mut Context<Self>) {
-        if self.asr_active() || self.translation_models.downloading() {
-            return;
-        }
-        let count = self.translation_models.catalog.len();
-        if count > 0 {
-            self.translation_models.selected = (self.translation_models.selected + 1) % count;
-            self.translation_models.snapshot = Default::default();
-            self.translation_status = "点击安装并选用后才更换运行模型".into();
-            cx.notify();
-        }
-    }
     pub fn install_translation_model(&mut self, cx: &mut Context<Self>) {
         if !self.asr_active() && !self.importing_model {
             self.translation_models.install(!self.offline);
@@ -1219,47 +1192,6 @@ impl Session {
     }
     pub fn cancel_translation_install(&mut self, cx: &mut Context<Self>) {
         self.translation_models.cancel();
-        cx.notify();
-    }
-    pub fn cycle_compute(&mut self, cx: &mut Context<Self>) {
-        if self.asr_active() {
-            return;
-        }
-        self.compute = match self.compute {
-            subveil_translate::Compute::Cpu => self
-                .gpu_devices
-                .first()
-                .map(|d| subveil_translate::Compute::Gpu(d.index))
-                .unwrap_or_default(),
-            subveil_translate::Compute::Gpu(index) => self
-                .gpu_devices
-                .iter()
-                .position(|d| d.index == index)
-                .and_then(|position| self.gpu_devices.get(position + 1))
-                .map(|d| subveil_translate::Compute::Gpu(d.index))
-                .unwrap_or_default(),
-        };
-        cx.notify();
-    }
-    pub fn cycle_asr_compute(&mut self, cx: &mut Context<Self>) {
-        if self.asr_active() || self.asr_stopping {
-            return;
-        }
-        self.asr_config.local_compute = match self.asr_config.local_compute {
-            subveil_translate::Compute::Cpu => subveil_translate::Compute::Gpu(0),
-            subveil_translate::Compute::Gpu(_) => subveil_translate::Compute::Cpu,
-        };
-        cx.notify();
-    }
-    pub fn cycle_whisper_block(&mut self, cx: &mut Context<Self>) {
-        if self.asr_active() || self.asr_stopping {
-            return;
-        }
-        self.asr_config.whisper_block_ms = match self.asr_config.whisper_block_ms {
-            2000 => 4000,
-            4000 => 8000,
-            _ => 2000,
-        };
         cx.notify();
     }
     pub fn toggle_offline(&mut self, cx: &mut Context<Self>) {
@@ -1288,6 +1220,7 @@ impl Session {
         if self.saving_local || self.restoring_local {
             return;
         }
+        self.refresh_profile_metadata();
         let Some(path) = self
             .config_path
             .as_ref()
@@ -1310,6 +1243,14 @@ impl Session {
             }
         };
         let preferences = storage::LocalPreferences {
+            profiles: self.profiles.clone(),
+            selected_profile: self.selected_profile,
+            capture_source: match &self.capture_target {
+                subveil_audio::CaptureTarget::DefaultOutput => None,
+                subveil_audio::CaptureTarget::Node(source) => {
+                    Some(storage::SourcePreference::from_source(source))
+                }
+            },
             vad_model: self.asr_config.vad_model.clone(),
             asr_model: self.asr_config.local_model.clone(),
             translation_model: self.translation_model.clone(),

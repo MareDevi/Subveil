@@ -117,8 +117,9 @@ impl Config {
     /// Validate settings and backend availability before capture starts.
     pub fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
-            matches!(self.language.as_str(), "en" | "ja")
-                || (self.provider == Provider::Local && self.language == "zh"),
+            self.provider
+                .source_languages()
+                .contains(&self.language.as_str()),
             "ASR language is unsupported by the selected provider"
         );
         anyhow::ensure!(
@@ -137,7 +138,9 @@ impl Config {
             );
         }
         anyhow::ensure!(
-            matches!(self.target_language.as_str(), "zh" | "en" | "ja"),
+            self.provider
+                .target_languages()
+                .contains(&self.target_language.as_str()),
             "target language must be zh, en or ja"
         );
         if let Some(rate) = self.provider.required_rate() {

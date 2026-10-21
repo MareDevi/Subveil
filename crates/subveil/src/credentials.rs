@@ -7,14 +7,42 @@ use std::{
 };
 use subveil_core::services::ServiceSettings;
 
-fn command(action: &str, input: Option<&[u8]>) -> anyhow::Result<Vec<u8>> {
+pub fn availability() -> String {
+    let installed = std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|p| p.join("secret-tool").is_file()));
+    if !installed {
+        "系统密钥环不可用：请安装 libsecret 的 secret-tool；当前配置仍可仅在内存使用".into()
+    } else if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
+        "未检测到会话总线；密钥环读写可能不可用".into()
+    } else {
+        "已找到 secret-tool 与会话总线；点击读取或保存时检查密钥环，不会自动上传".into()
+    }
+}
+fn attributes(profile: u32) -> Vec<String> {
+    let mut attributes = vec![
+        "application".into(),
+        "subveil".into(),
+        "kind".into(),
+        if profile == 0 {
+            "cloud-services"
+        } else {
+            "cloud-services-profile"
+        }
+        .into(),
+    ];
+    if profile != 0 {
+        attributes.extend(["profile".into(), profile.to_string()]);
+    }
+    attributes
+}
+fn command(action: &str, input: Option<&[u8]>, profile: u32) -> anyhow::Result<Vec<u8>> {
     let mut command = Command::new("secret-tool");
     command.arg(action);
     if action == "store" {
         command.args(["--label", "Subveil cloud services"]);
     }
+    command.args(attributes(profile));
     command
-        .args(["application", "subveil", "kind", "cloud-services"])
         .stdin(if input.is_some() {
             Stdio::piped()
         } else {
@@ -70,17 +98,17 @@ fn command(action: &str, input: Option<&[u8]>) -> anyhow::Result<Vec<u8>> {
     }
     result
 }
-pub fn save(settings: &ServiceSettings) -> anyhow::Result<()> {
+pub fn save(settings: &ServiceSettings, profile: u32) -> anyhow::Result<()> {
     for key in settings.0.keys() {
         settings.get(key)?;
     }
     let encoded = toml::to_string(settings)?;
     ensure!(encoded.len() <= 65_536, "云服务配置超过 64 KiB");
-    command("store", Some(encoded.as_bytes()))?;
+    command("store", Some(encoded.as_bytes()), profile)?;
     Ok(())
 }
-pub fn load() -> anyhow::Result<ServiceSettings> {
-    let bytes = command("lookup", None)?;
+pub fn load(profile: u32) -> anyhow::Result<ServiceSettings> {
+    let bytes = command("lookup", None, profile)?;
     // Never propagate parser errors: they can quote credential-bearing source lines.
     let text = std::str::from_utf8(&bytes).map_err(|_| anyhow::anyhow!("系统凭据编码无效"))?;
     let settings: ServiceSettings =
@@ -90,7 +118,21 @@ pub fn load() -> anyhow::Result<ServiceSettings> {
     }
     Ok(settings)
 }
-pub fn clear() -> anyhow::Result<()> {
-    command("clear", None)?;
+pub fn clear(profile: u32) -> anyhow::Result<()> {
+    command("clear", None, profile)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn legacy_lookup_and_clear_cannot_match_named_profiles() {
+        let legacy = super::attributes(0);
+        assert_eq!(legacy, ["application", "subveil", "kind", "cloud-services"]);
+        let first = super::attributes(1);
+        let second = super::attributes(2);
+        assert_ne!(legacy[3], first[3]);
+        assert_ne!(first[5], second[5]);
+        assert_eq!(first[4], "profile");
+    }
 }

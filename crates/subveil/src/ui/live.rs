@@ -3,6 +3,8 @@ use super::*;
 impl ControlView {
     pub(super) fn render_live(&self, cx: &mut Context<Self>) -> gpui_kit::Div {
         let session = self.session.read(cx);
+        let issues = session.start_issues();
+        let busy = session.configuration_busy();
         let mut preview = column()
             .gap_3()
             .min_h_48()
@@ -113,6 +115,105 @@ impl ControlView {
                 .loading(session.refreshing_sources),
             )
             .child(help(session.source_status.clone(), cx))
+            .child(self.render_choice(Choice::Profile, "服务配置", busy, cx))
+            .child(self.render_choice(
+                Choice::SourceLanguage,
+                "源语种",
+                busy || session.asr_config.provider.automatic_language(),
+                cx,
+            ))
+            .child(self.render_choice(Choice::TargetLanguage, "目标语种", busy, cx))
+            .child(field(
+                "识别服务",
+                Select::new(&self.provider)
+                    .w_full()
+                    .accessibility_label("识别服务")
+                    .disabled(busy || session.offline),
+                cx,
+            ))
+            .child(self.render_choice(
+                Choice::Translation,
+                "文字翻译",
+                busy || session.asr_config.provider.translates(),
+                cx,
+            ))
+            .child(help(
+                format!(
+                    "当前链路：{} → {} → {}",
+                    session.selected_source_label(),
+                    session.asr_config.provider.name(),
+                    if session.asr_config.provider.translates() {
+                        "服务自带译文"
+                    } else {
+                        session.translation_provider.name()
+                    }
+                ),
+                cx,
+            ))
+            .child(help(
+                if issues.is_empty() {
+                    "配置已就绪；开始后会后台校验并加载模型".into()
+                } else {
+                    issues.join("；")
+                },
+                cx,
+            ))
+            .child(
+                button(
+                    "start-live-subtitles",
+                    if session.asr_active() {
+                        "停止识别与音频"
+                    } else if session.asr_config.provider.is_cloud() {
+                        "同意上传音频并开始"
+                    } else if session.asr_config.provider == subveil_asr::Provider::Mock {
+                        "开始模拟识别（不是实际字幕）"
+                    } else {
+                        "开始本地字幕"
+                    },
+                    &self.session,
+                    Session::toggle_asr,
+                )
+                .disabled(!session.asr_active() && !issues.is_empty())
+                .primary(),
+            )
+            .when(session.asr_config.provider.is_cloud(), |view| {
+                view.child(help(
+                    format!(
+                        "音频上传目标：{}；云服务可能收费",
+                        session.asr_config.destination()
+                    ),
+                    cx,
+                ))
+            })
+            .when(
+                !session.asr_config.provider.translates()
+                    && matches!(
+                        session.translation_provider,
+                        subveil_translate::Provider::OpenAi | subveil_translate::Provider::DeepL
+                    ),
+                |view| {
+                    view.child(help(
+                        format!(
+                            "文本上传目标：{}；包含原文及最多三句上下文",
+                            session.text_destination()
+                        ),
+                        cx,
+                    ))
+                    .child(
+                        button(
+                            "live-text-consent",
+                            if session.allow_text_upload {
+                                "撤销文本上传授权"
+                            } else {
+                                "同意本次会话上传文本"
+                            },
+                            &self.session,
+                            Session::consent_text_upload,
+                        )
+                        .disabled(busy),
+                    )
+                },
+            )
             .child(
                 row()
                     .child(
