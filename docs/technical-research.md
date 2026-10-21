@@ -1,5 +1,13 @@
 # M00 技术调研
 
+## 全应用界面重构调研（2026-10-21）
+
+本轮先检查 Git（main 干净）、mise Rust 1.99.1 与 doctor。现有工程已使用 `gpui-kit =0.8.0`，无需迁移依赖。Context7 `/longbridge/gpui-kit` 与本机发布源码共同核对 Sidebar、SidebarMenuItem、StatusBar、Progress、Icon API；保留单一 facade 和 Root。
+
+完整阅读 GPUI Kit Design Guides / Coding Guides。采用 Zed 式稳定侧栏、平面分区与紧凑状态栏；参考 Mimi 的字幕、声音与语言、模型与服务、显示样式任务划分，不复制其 Web/Tauri 实现。主任务仍是实时字幕，服务与模型分离，原有业务状态、明确上传授权及停止行为保留。布局使用主题 token 与 rem，原生窗口及用户字幕内容几何仍是已说明的像素边界。
+
+来源（2026-10-21）：[GPUI Kit](https://gpui-kit.com/)、[Design Guides](https://gpui-kit.com/docs/design-guides/)、[Coding Guides](https://gpui-kit.com/docs/coding-guides/)、[Mimi](https://github.com/yuxino/Mimi)、[Zed appearance](https://zed.dev/docs/appearance)。本轮计划及验收记录见 [ui-redesign.md](ui-redesign.md)。
+
 ## M05 追加：原生翻译与 GPU（2026-10-21）
 
 - Context7 resolve/query 后核对 llama-cpp-2 0.1.160 与实际 Cargo 源码：`LlamaBackend::init`、`list_llama_ggml_backend_devices`、`LlamaModelParams::with_devices/with_n_gpu_layers`、`LlamaModel::chat_template/apply_chat_template`、`LlamaVocab::tokenize/is_eog/token_to_piece`。主线旧示例中的 `model.str_to_token`、`model.is_eog_token` 不适用于当前发布版；使用实际 vocab API。
