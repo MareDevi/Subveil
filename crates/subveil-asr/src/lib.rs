@@ -11,6 +11,7 @@ mod mock;
 pub mod models;
 mod protocols;
 mod providers;
+mod recovery;
 mod vad;
 pub use vad::VadConfig;
 

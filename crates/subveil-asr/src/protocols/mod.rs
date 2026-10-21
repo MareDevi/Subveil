@@ -40,7 +40,7 @@ async fn reconnect(
     shared: &Shared,
 ) -> anyhow::Result<()> {
     let mut next = 1;
-    let mut retries = 0_u32;
+    let mut recovery = crate::recovery::Recovery::default();
     loop {
         while frames.pop().is_some() {}
         shared.status(
@@ -52,15 +52,17 @@ async fn reconnect(
             frames,
             false,
         );
+        let started = Instant::now();
         if let Err(error) = connected(config, session, &mut next, frames, shared).await {
-            retries = retries.saturating_add(1);
-            let delay = 1_u64 << retries.min(3);
+            let Some(delay) = recovery.next(&error, started.elapsed()) else {
+                return Err(error.context("识别已停止；修正配置或稍后重新开始"));
+            };
             shared.status(
-                format!("{error}；{delay} 秒后重试（本次上传仍获准）"),
+                format!("{error}；{} 秒后重试（本次上传仍获准）", delay.as_secs()),
                 frames,
                 true,
             );
-            tokio::time::sleep(Duration::from_secs(delay)).await;
+            tokio::time::sleep(delay).await;
         }
     }
 }
@@ -71,7 +73,7 @@ async fn connected(
     frames: &FrameReceiver,
     shared: &Shared,
 ) -> anyhow::Result<()> {
-    let plan = connection::prepare(config)?;
+    let plan = connection::prepare(config).map_err(|_| crate::recovery::Failure::Configuration)?;
     let limits = WebSocketConfig::default()
         .max_message_size(Some(1_048_576))
         .max_frame_size(Some(1_048_576));
@@ -82,7 +84,7 @@ async fn connected(
     )
     .await
     .context("云端握手超时")?
-    .map_err(|_| anyhow::anyhow!("云端握手失败，请检查服务权限、凭据和网络"))?;
+    .map_err(crate::recovery::handshake)?;
     if plan.wait_created {
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
@@ -95,7 +97,7 @@ async fn connected(
                     let v: serde_json::Value = serde_json::from_str(text.as_ref())
                         .map_err(|_| anyhow::anyhow!("云端初始化 JSON 无效"))?;
                     if v["type"] == "error" || v.get("error").is_some() {
-                        anyhow::bail!("云端初始化错误");
+                        return Err(crate::recovery::service(&v).into());
                     }
                     if matches!(
                         v["type"].as_str(),

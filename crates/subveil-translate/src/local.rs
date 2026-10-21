@@ -4,11 +4,11 @@ use anyhow::{Context as _, ensure};
 use std::{
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, Command, Stdio},
+    process::{Child, Command, Stdio},
     sync::{
         Arc, Mutex,
         atomic::Ordering,
-        mpsc::{self, Receiver, RecvTimeoutError},
+        mpsc::{self, Receiver, RecvTimeoutError, SyncSender},
     },
     thread,
     time::{Duration, Instant},
@@ -56,7 +56,7 @@ fn executable() -> anyhow::Result<PathBuf> {
 
 struct Helper {
     child: Child,
-    input: ChildStdin,
+    input: SyncSender<Vec<u8>>,
     output: Receiver<Result<Output, String>>,
 }
 impl Helper {
@@ -71,7 +71,8 @@ impl Helper {
             .stderr(Stdio::null())
             .spawn()
             .context("无法启动本地推理程序")?;
-        let input = child.stdin.take().context("推理程序缺少输入通道")?;
+        let mut stdin = child.stdin.take().context("推理程序缺少输入通道")?;
+        let (input, requests) = mpsc::sync_channel::<Vec<u8>>(1);
         let stdout = child.stdout.take().context("推理程序缺少输出通道")?;
         let (sender, output) = mpsc::sync_channel(1);
         let reader = thread::Builder::new()
@@ -95,6 +96,26 @@ impl Helper {
                 }
             });
         if let Err(error) = reader {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error.into());
+        }
+        // A native process may stop reading stdin after readiness. Only this
+        // writer can block; the owner still observes cancellation and deadlines.
+        if let Err(error) = thread::Builder::new()
+            .name("subveil-inference-write".into())
+            .spawn(move || {
+                while let Ok(bytes) = requests.recv() {
+                    if stdin
+                        .write_all(&bytes)
+                        .and_then(|()| stdin.flush())
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            })
+        {
             let _ = child.kill();
             let _ = child.wait();
             return Err(error.into());
@@ -208,7 +229,7 @@ fn run(
         Compute::Cpu => "cpu".into(),
         Compute::Gpu(index) => index.to_string(),
     };
-    let mut helper = Helper::spawn(&[manifest.as_os_str(), std::ffi::OsStr::new(&device)])?;
+    let helper = Helper::spawn(&[manifest.as_os_str(), std::ffi::OsStr::new(&device)])?;
     let stopped = || shared.stop.load(Ordering::Relaxed);
     let ready_label = match helper.receive(Instant::now() + Duration::from_secs(30), stopped)? {
         Output::Ready(label) => {
@@ -257,11 +278,13 @@ fn run(
                 .min(30_000) as u64,
         };
         let result = (|| -> anyhow::Result<_> {
-            let encoded = serde_json::to_vec(&input)?;
+            let mut encoded = serde_json::to_vec(&input)?;
             ensure!(encoded.len() < 65_536, "推理请求超过协议长度限制");
-            helper.input.write_all(&encoded)?;
-            helper.input.write_all(b"\n")?;
-            helper.input.flush()?;
+            encoded.push(b'\n');
+            helper
+                .input
+                .try_send(encoded)
+                .map_err(|_| anyhow::anyhow!("本地推理写入队列不可用"))?;
             match helper.receive(request.deadline, stopped)? {
                 Output::Translation {
                     id: response_id,
@@ -341,6 +364,25 @@ mod tests {
             assert!(
                 helper
                     .receive(Instant::now() + Duration::from_millis(30), || cancelled)
+                    .is_err()
+            );
+            drop(helper);
+            assert!(started.elapsed() < Duration::from_secs(1));
+        }
+        Ok(())
+    }
+    #[cfg(unix)]
+    #[test]
+    fn blocked_stdin_cannot_prevent_cancellation_or_deadline() -> anyhow::Result<()> {
+        for cancelled in [true, false] {
+            let started = Instant::now();
+            let helper = shell("exec sleep 5")?;
+            // Larger than Linux's usual pipe capacity, without unsafe or a
+            // platform-specific fcntl dependency. Exercises the actual writer.
+            helper.input.try_send(vec![b'x'; 2 * 1024 * 1024])?;
+            assert!(
+                helper
+                    .receive(Instant::now() + Duration::from_millis(40), || cancelled)
                     .is_err()
             );
             drop(helper);

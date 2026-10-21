@@ -36,24 +36,26 @@ async fn reconnect(
     shared: &Shared,
 ) -> anyhow::Result<()> {
     let mut transcript = Transcript::new(session, &config.language);
-    let mut retries = 0_u32;
+    let mut recovery = crate::recovery::Recovery::default();
     loop {
         // Never replay audio accumulated while disconnected or after consent withdrawal.
         while frames.pop().is_some() {}
         shared.status("正在连接 Deepgram · 系统音频将上传", frames, false);
+        let started = Instant::now();
         let result = connected(config, frames, shared, &mut transcript).await;
         match result {
             Ok(()) => return Ok(()),
             Err(error) => {
                 transcript.reset();
-                retries = retries.saturating_add(1);
-                let delay = 1_u64 << retries.min(3);
+                let Some(delay) = recovery.next(&error, started.elapsed()) else {
+                    return Err(error.context("识别已停止；修正配置或稍后重新开始"));
+                };
                 shared.status(
-                    format!("{error}；{delay} 秒后重试（音频仍获准上传）"),
+                    format!("{error}；{} 秒后重试（音频仍获准上传）", delay.as_secs()),
                     frames,
                     true,
                 );
-                tokio::time::sleep(Duration::from_secs(delay)).await;
+                tokio::time::sleep(delay).await;
             }
         }
     }
@@ -88,7 +90,7 @@ async fn connected(
     )
     .await
     .context("云端连接超时")?
-    .map_err(|_| anyhow::anyhow!("云端连接失败，请检查网络、凭据和服务状态"))?;
+    .map_err(crate::recovery::handshake)?;
     while frames.pop().is_some() {}
     stream_audio(socket, config, frames, shared, transcript).await
 }

@@ -55,7 +55,7 @@ impl Decoder {
                 .is_some_and(|c| c.as_i64().is_none_or(|c| c != 0))
             || v["header"]["event"] == "task-failed"
         {
-            anyhow::bail!("云端返回服务错误");
+            return Err(crate::recovery::service(&v).into());
         }
         let kind = v["type"].as_str().unwrap_or("");
         let event_id = v["event_id"].as_str().unwrap_or("");
