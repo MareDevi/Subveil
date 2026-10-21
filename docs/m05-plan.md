@@ -20,6 +20,15 @@
 5. 保留字幕 Session/Segment/revision 保护及有界队列，翻译失败不终止 ASR。补齐设备无关测试和真实 CPU/GPU、日英字幕链路验收。
 6. mise run check、真实窗口运行、文档、审查提交并推送 origin/main。单次测试运行不超过 90 秒；长时稳定性不在本轮伪造验收。
 
+## RTX 4060 Laptop 后续优化目标（2026-10-21）
+
+参考用户提供的模型比较，增加资源与延迟验收规范，详见 [GPU ASR 选型与性能验收](gpu-asr-evaluation.md)。本次仅更新规划，不改变已验收实现，也不将目标记为已达成。
+
+- 以 ASR 与文字翻译合计常驻显存尽量不超过 4 GiB、热态首条中文字幕 1–3 秒、持续处理速度至少 2 倍实时为优化目标。分别记录峰值显存、冷启动、原文与中文延迟，以及游戏 / 视频并行运行的影响。
+- 优先评估 Rust 绑定 whisper.cpp 的 CUDA Whisper large-v3-turbo，与现有 CPU SenseVoice / Zipformer 比较；继续复用 Qwen 本地文字翻译。选定兼容版本、固定权重校验值并完成本机推理前，不增加可用能力声明。
+- Whisper 滑窗重复解码与真正 streaming 分开描述。现有仅 Final 后翻译策略会等待句末；仅更换模型不能保证 1–3 秒中文目标。增量中文方案需要独立设计修订、稳定提交与过载策略。
+- 保留 CPU 路径；CUDA 与 Vulkan 分开验收。SeamlessStreaming / SeamlessM4T / Canary 保留为研究候选，不凭参数量或公开跑分切换默认模型。
+
 ## 来源
 
 实施中发现 sherpa 预编译静态库与本机 GCC 16 编译的 llama.cpp 在同一进程触发 `std::bad_alloc`。GDB 定位到 main 前的 C++ regex 静态初始化，而独立 llama 进程正常。最终将模型目录与校验拆为无推理运行库依赖的 `subveil-models`，使用独立 Rust `subveil-inference` 程序加载 GGUF；GPUI 进程不链接 llama。此变更同时提供可强制终止的取消与超时边界，保留 sherpa 与 GPUI 现有发布来源。
