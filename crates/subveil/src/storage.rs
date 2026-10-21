@@ -11,6 +11,7 @@ use subveil_core::config::OverlaySettings;
 #[serde(default, deny_unknown_fields)]
 pub struct LocalPreferences {
     pub asr_model: Option<PathBuf>,
+    pub vad_model: Option<PathBuf>,
     pub translation_model: Option<PathBuf>,
     pub language: String,
     pub target: String,
@@ -130,6 +131,7 @@ mod tests {
         let path = directory.join("local-models.toml");
         let preferences = LocalPreferences {
             asr_model: Some("/models/asr.toml".into()),
+            vad_model: None,
             translation_model: Some("/models/translation.toml".into()),
             language: "ja".into(),
             target: "zh".into(),

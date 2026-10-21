@@ -21,6 +21,19 @@ impl ControlView {
                 cx,
             ))
             .child(self.render_local_models(cx))
+            .child(section("语音检测", "可选 Silero 神经 VAD；关闭时保留能量分段对照。", cx))
+            .child(help(if session.asr_config.vad_model.is_some() { "当前使用 Silero VAD" } else { "当前使用能量阈值" }, cx))
+            .when_some(session.vad_models.current(), |view, model| view
+                .child(help(model.summary.clone(), cx))
+                .child(Link::new("vad-source").href(model.source()).child("VAD 来源"))
+                .child(Link::new("vad-license").href(model.license_url.clone()).child("VAD 许可：MIT")))
+            .child(row()
+                .child(button("install-vad", if session.offline { "校验并启用本机 VAD" } else { "安装并启用 Silero VAD" }, &self.session, |s, cx| {
+                    s.vad_models.install(!s.offline); cx.notify();
+                }).disabled(busy || session.vad_models.downloading()))
+                .child(button("disable-vad", "使用能量分段", &self.session, |s, cx| { s.asr_config.vad_model = None; cx.notify(); }).disabled(busy))
+                .child(button("cancel-vad", "取消 VAD 安装", &self.session, |s, cx| {s.vad_models.cancel();cx.notify();}).disabled(!session.vad_models.downloading())))
+            .child(help(session.vad_models.snapshot.status.clone(), cx))
             .child(section(
                 "本地翻译",
                 "模型在本机运行；语音服务中选择本地翻译后生效。",

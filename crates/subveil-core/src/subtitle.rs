@@ -167,7 +167,13 @@ impl SubtitleState {
             .any(|entry| entry.read_until_ms.is_some())
             && let Some(entry) = self.entries.iter_mut().find(|entry| entry.awaiting_read)
         {
-            entry.read_until_ms = Some(now_ms.saturating_add(3_000));
+            let text = match &entry.translation {
+                TranslationState::Complete(text) => text.as_str(),
+                _ => "",
+            };
+            let units: u64 = text.chars().map(|c| if c.is_ascii() { 1 } else { 2 }).sum();
+            let reading_ms = (units.saturating_mul(1000) / 15).clamp(3_000, 10_000);
+            entry.read_until_ms = Some(now_ms.saturating_add(reading_ms));
             changed = true;
         }
         changed
@@ -642,6 +648,21 @@ mod tests {
         assert_eq!(state.visible().len(), 2);
         state.advance_presentation(3_200);
         state.expire(3_200);
+        assert!(state.visible().is_empty());
+    }
+    #[test]
+    fn long_translation_gets_bounded_reading_time_beyond_three_seconds() {
+        let mut state = SubtitleState::new(1, 8, 1_000);
+        let row = segment(1, 1, 1, "long source");
+        state.apply(TranscriptEvent::Final(row.clone()), 0);
+        state.request_translation(row.key);
+        state.finish_translation(row.key, Ok("字幕".repeat(100)), 100);
+        state.advance_presentation(100);
+        state.advance_presentation(3_100);
+        state.expire(3_100);
+        assert_eq!(state.visible()[0].transcript.key, row.key);
+        state.advance_presentation(10_100);
+        state.expire(10_100);
         assert!(state.visible().is_empty());
     }
 

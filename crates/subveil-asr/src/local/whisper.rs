@@ -239,6 +239,44 @@ struct Job {
     epoch: u64,
     audio: super::offline::SegmentAudio,
     queued: Instant,
+    original_start: u64,
+    overlapping: bool,
+}
+// Only audio-contiguous chunks receive a 400 ms look-back. Text removal below
+// is also guarded by adjacency of accepted results, never by text alone.
+#[derive(Default)]
+struct Overlap {
+    end: Option<u64>,
+    samples: Vec<f32>,
+}
+impl Overlap {
+    fn prepend(&mut self, audio: &mut super::offline::SegmentAudio, rate: u32) -> bool {
+        let contiguous = self.end == Some(audio.start) && !self.samples.is_empty();
+        let tail = (rate as usize * 400 / 1000).min(audio.samples.len());
+        let next = audio.samples[audio.samples.len() - tail..].to_vec();
+        if contiguous {
+            let mut samples = std::mem::take(&mut self.samples);
+            audio.start = audio.start.saturating_sub(samples.len() as u64);
+            samples.append(&mut audio.samples);
+            audio.samples = samples;
+        }
+        self.end = Some(audio.end);
+        self.samples = next;
+        contiguous
+    }
+}
+fn remove_overlap(previous: &str, current: &str) -> String {
+    let left: Vec<_> = previous.chars().collect();
+    let right: Vec<_> = current.chars().collect();
+    let count = (4..=left.len().min(right.len()).min(80))
+        .rev()
+        .find(|n| left[left.len() - n..] == right[..*n])
+        .unwrap_or(0);
+    right[count..]
+        .iter()
+        .collect::<String>()
+        .trim_start()
+        .to_owned()
 }
 struct Completed {
     job: Job,
@@ -270,12 +308,14 @@ fn run_loaded(
     short.vad.max_segment_ms = config.whisper_block_ms;
     short.vad.pre_roll_ms = short.vad.pre_roll_ms.min(200);
     short.vad.min_speech_ms = short.vad.min_speech_ms.min(150);
-    let mut segmenter = Segmenter::new(&short);
+    let mut segmenter = Segmenter::load(&short)?;
     let mut continuity = Continuity::default();
     let mut transcript = Transcript::new(session, &config.language);
     let mut last = Instant::now();
     let mut timed_out = false;
     let mut epoch = 0_u64;
+    let mut overlap = Overlap::default();
+    let mut previous_result: Option<(u64, String)> = None;
     let jobs = ArrayQueue::<Job>::new(1);
     let results = ArrayQueue::<Result<Completed, String>>::new(2);
     let cancel = AtomicBool::new(false);
@@ -331,9 +371,18 @@ fn run_loaded(
                     let audio = completed.job.audio;
                     let audio_ms =
                         audio.samples.len() as u64 * 1000 / u64::from(config.sample_rate);
+                    let text = if completed.job.overlapping
+                        && let Some((end, text)) = &previous_result
+                        && *end == completed.job.original_start
+                    {
+                        remove_overlap(text, &completed.result.text)
+                    } else {
+                        completed.result.text.clone()
+                    };
+                    previous_result = Some((audio.end, completed.result.text));
                     if let Some(event) = transcript.update(
-                        completed.result.text,
-                        audio.start * 1000 / u64::from(config.sample_rate),
+                        text,
+                        completed.job.original_start * 1000 / u64::from(config.sample_rate),
                         audio.end * 1000 / u64::from(config.sample_rate),
                         true,
                     ) {
@@ -355,6 +404,8 @@ fn run_loaded(
                 if let Some(frame) = frames.pop() {
                     if !continuity.accept(&frame, config.sample_rate) {
                         segmenter.reset();
+                        overlap = Overlap::default();
+                        previous_result = None;
                         transcript.reset();
                         epoch += 1;
                         while jobs.pop().is_some() {
@@ -365,22 +416,30 @@ fn run_loaded(
                     }
                     last = Instant::now();
                     timed_out = false;
-                    if let Some(audio) =
+                    if let Some(mut audio) =
                         segmenter.accept(&frame.samples[..frame.len], frame.sample_offset)
-                        && jobs
+                    {
+                        let original_start = audio.start;
+                        let overlapping = overlap.prepend(&mut audio, config.sample_rate);
+                        if jobs
                             .force_push(Job {
                                 epoch,
                                 audio,
                                 queued: Instant::now(),
+                                original_start,
+                                overlapping,
                             })
                             .is_some()
-                    {
-                        dropped_segment(shared);
-                        shared.status("Whisper 推理过载；已丢弃最旧等待分块", frames, false);
+                        {
+                            dropped_segment(shared);
+                            shared.status("Whisper 推理过载；已丢弃最旧等待分块", frames, false);
+                        }
                     }
                 } else {
                     if !timed_out && last.elapsed() >= Duration::from_secs(2) {
                         segmenter.reset();
+                        overlap = Overlap::default();
+                        previous_result = None;
                         transcript.reset();
                         epoch += 1;
                         timed_out = true;
@@ -404,6 +463,34 @@ fn run_loaded(
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    #[test]
+    fn audio_overlap_requires_contiguity_and_text_overlap_is_unicode_safe() {
+        let mut overlap = Overlap::default();
+        let mut first = super::super::offline::SegmentAudio {
+            start: 0,
+            end: 1000,
+            samples: vec![0.1; 1000],
+        };
+        assert!(!overlap.prepend(&mut first, 1000));
+        let mut second = super::super::offline::SegmentAudio {
+            start: 1000,
+            end: 2000,
+            samples: vec![0.2; 1000],
+        };
+        assert!(overlap.prepend(&mut second, 1000));
+        assert_eq!((second.start, second.samples.len()), (600, 1400));
+        let mut gap = super::super::offline::SegmentAudio {
+            start: 3000,
+            end: 4000,
+            samples: vec![0.3; 1000],
+        };
+        assert!(!overlap.prepend(&mut gap, 1000));
+        assert_eq!(
+            remove_overlap("電車が到着します", "到着します。ご注意ください"),
+            "。ご注意ください"
+        );
+        assert_eq!(remove_overlap("no", "no extra cost"), "no extra cost");
+    }
     fn shell(script: &str) -> anyhow::Result<WhisperEngine> {
         WhisperEngine::spawn(
             Path::new("/bin/sh"),

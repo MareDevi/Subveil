@@ -25,6 +25,8 @@ pub(super) struct Segmenter {
     rate: u32,
     capacity: usize,
     samples: VecDeque<f32>,
+    neural: Option<sherpa_onnx::VoiceActivityDetector>,
+    origin: Option<u64>,
 }
 impl Segmenter {
     pub(super) fn new(config: &Config) -> Self {
@@ -37,13 +39,59 @@ impl Segmenter {
             rate: config.sample_rate,
             capacity,
             samples: VecDeque::new(),
+            neural: None,
+            origin: None,
         }
+    }
+    pub(super) fn load(config: &Config) -> anyhow::Result<Self> {
+        let mut segmenter = Self::new(config);
+        if let Some(manifest) = &config.vad_model {
+            ensure!(config.sample_rate == 16000, "Silero VAD 需要 16 kHz 音频");
+            let model = subveil_models::verified_vad_model(manifest)?;
+            let settings = sherpa_onnx::VadModelConfig {
+                silero_vad: sherpa_onnx::SileroVadModelConfig {
+                    model: Some(model.to_str().context("VAD 路径必须是 UTF-8")?.into()),
+                    threshold: 0.5,
+                    min_silence_duration: config.vad.trailing_silence_ms as f32 / 1000.,
+                    min_speech_duration: config.vad.min_speech_ms as f32 / 1000.,
+                    window_size: 512,
+                    max_speech_duration: config.vad.max_segment_ms as f32 / 1000.,
+                },
+                sample_rate: 16000,
+                num_threads: 1,
+                provider: Some("cpu".into()),
+                ..Default::default()
+            };
+            segmenter.neural = Some(
+                sherpa_onnx::VoiceActivityDetector::create(&settings, 32.)
+                    .context("无法加载 Silero VAD；请重新校验模型，不会自动退回能量检测")?,
+            );
+        }
+        Ok(segmenter)
     }
     pub(super) fn reset(&mut self) {
         self.vad.reset();
         self.samples.clear();
+        self.origin = None;
+        if let Some(neural) = &self.neural {
+            neural.reset();
+        }
     }
     pub(super) fn accept(&mut self, samples: &[f32], offset: u64) -> Option<SegmentAudio> {
+        if let Some(neural) = &self.neural {
+            let origin = *self.origin.get_or_insert(offset);
+            neural.accept_waveform(samples);
+            let segment = neural.front()?;
+            let start = origin.saturating_add(segment.start().max(0) as u64);
+            let samples = segment.samples().to_vec();
+            let end = start.saturating_add(samples.len() as u64);
+            neural.pop();
+            return Some(SegmentAudio {
+                start,
+                end,
+                samples,
+            });
+        }
         self.samples
             .extend(samples.iter().map(|v| if v.is_finite() { *v } else { 0. }));
         while self.samples.len() > self.capacity {
@@ -152,7 +200,7 @@ fn run_loaded(
     let jobs = ArrayQueue::<Job>::new(2);
     let results = ArrayQueue::<Result<Completed, String>>::new(2);
     let cancel = AtomicBool::new(false);
-    let mut segmenter = Segmenter::new(config);
+    let mut segmenter = Segmenter::load(config)?;
     let mut continuity = Continuity::default();
     let mut transcript = Transcript::new(session, &config.language);
     let mut last = Instant::now();
@@ -284,6 +332,14 @@ fn run_loaded(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn selected_neural_vad_never_silently_falls_back_when_manifest_missing() {
+        let config = crate::Config {
+            vad_model: Some("/missing/subveil-vad-manifest.toml".into()),
+            ..Default::default()
+        };
+        assert!(super::Segmenter::load(&config).is_err());
+    }
     use super::*;
     #[test]
     fn slow_decode_keeps_consuming_pcm_and_reports_whole_segment_drops() -> anyhow::Result<()> {

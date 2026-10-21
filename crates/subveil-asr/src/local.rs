@@ -61,6 +61,7 @@ impl Manifest {
             "模型语种必须来自 en / ja / zh"
         );
         match manifest.kind {
+            ModelKind::SileroVad => anyhow::bail!("VAD 模型不是语音识别模型"),
             ModelKind::StreamingTransducer => ensure!(
                 manifest.tokens.is_some()
                     && manifest.encoder.is_some()

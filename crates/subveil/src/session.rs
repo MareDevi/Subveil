@@ -44,6 +44,7 @@ pub struct Session {
     streaming_scheduler: subveil_translate::StreamingTranslationScheduler,
     pub model_info: String,
     pub local_models: crate::models::LocalModels,
+    pub vad_models: crate::models::LocalModels,
     pub translation_models: crate::models::LocalModels,
     pub translation_model: Option<PathBuf>,
     pub compute: subveil_translate::Compute,
@@ -135,6 +136,7 @@ impl Session {
                 }
                 match preferences {
                     Ok(Some(preferences)) => {
+                        session.asr_config.vad_model = preferences.vad_model;
                         session.incremental_translation = preferences.incremental_translation;
                         session.asr_config.local_compute = if preferences.asr_cuda {
                             subveil_translate::Compute::Gpu(0)
@@ -237,6 +239,7 @@ impl Session {
             streaming_scheduler: Default::default(),
             model_info: "尚未选择本地模型".into(),
             local_models: crate::models::LocalModels::new(),
+            vad_models: crate::models::LocalModels::vad(),
             translation_models: crate::models::LocalModels::for_translation(true),
             translation_model: None,
             compute: subveil_translate::Compute::Cpu,
@@ -297,6 +300,12 @@ impl Session {
             changed = true;
         }
         let (translation_changed, installed_translation) = self.translation_models.poll();
+        let (vad_changed, installed_vad) = self.vad_models.poll();
+        changed |= vad_changed;
+        if let Some((path, _)) = installed_vad {
+            self.asr_config.vad_model = Some(path);
+            self.message = "Silero VAD 已启用；下次本地识别使用神经语音检测".into();
+        }
         changed |= translation_changed;
         if let Some((path, model)) = installed_translation {
             self.translation_model = Some(path);
@@ -799,6 +808,7 @@ impl Session {
             return;
         }
         if self.local_models.downloading()
+            || self.vad_models.downloading()
             || self.translation_models.downloading()
             || self.importing_model
         {
@@ -1217,6 +1227,7 @@ impl Session {
             }
         };
         let preferences = storage::LocalPreferences {
+            vad_model: self.asr_config.vad_model.clone(),
             asr_model: self.asr_config.local_model.clone(),
             translation_model: self.translation_model.clone(),
             language: self.asr_config.language.clone(),

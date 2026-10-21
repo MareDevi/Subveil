@@ -14,13 +14,20 @@ impl LocalModels {
         Self::for_translation(false)
     }
     pub fn for_translation(translation: bool) -> Self {
+        Self::filtered(move |kind| {
+            kind != subveil_asr::ModelKind::SileroVad
+                && (kind == subveil_asr::ModelKind::QwenTranslation) == translation
+        })
+    }
+    pub fn vad() -> Self {
+        Self::filtered(|kind| kind == subveil_asr::ModelKind::SileroVad)
+    }
+    fn filtered(accept: impl Fn(subveil_asr::ModelKind) -> bool) -> Self {
         let result = subveil_asr::models::catalog().and_then(|models| {
             Ok((
                 models
                     .into_iter()
-                    .filter(|model| {
-                        (model.kind == subveil_asr::ModelKind::QwenTranslation) == translation
-                    })
+                    .filter(|model| accept(model.kind))
                     .collect(),
                 subveil_asr::models::data_root()?,
             ))

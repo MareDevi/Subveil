@@ -28,6 +28,8 @@ pub enum ModelKind {
     Whisper,
     /// GGUF instruction model for local text translation, never an ASR backend.
     QwenTranslation,
+    /// Optional Silero speech detector for bounded offline segmentation.
+    SileroVad,
 }
 impl ModelKind {
     /// User-facing distinction between real streaming and segmented offline inference.
@@ -37,6 +39,7 @@ impl ModelKind {
             Self::SenseVoice => "离线分段 · 句末识别",
             Self::Whisper => "Whisper · 短块识别",
             Self::QwenTranslation => "本地文字翻译 · GGUF",
+            Self::SileroVad => "Silero · 神经语音检测",
         }
     }
 }
@@ -153,9 +156,11 @@ impl Model {
             );
         }
         ensure!(
-            (matches!(self.kind, ModelKind::QwenTranslation | ModelKind::Whisper)
-                || names.contains(&"tokens.txt".to_owned()))
-                && names.contains(&"README.md".to_owned()),
+            (matches!(
+                self.kind,
+                ModelKind::QwenTranslation | ModelKind::Whisper | ModelKind::SileroVad
+            ) || names.contains(&"tokens.txt".to_owned()))
+                && (self.kind == ModelKind::SileroVad || names.contains(&"README.md".to_owned())),
             "模型包缺少 tokens 或来源说明"
         );
         Ok(())
@@ -217,6 +222,10 @@ pub fn verified_translation_model(path: &Path) -> anyhow::Result<PathBuf> {
 /// Verify a Whisper manifest and model before isolated native loading.
 pub fn verified_whisper_model(path: &Path) -> anyhow::Result<PathBuf> {
     verified_model(path, ModelKind::Whisper, 16000)
+}
+/// Verify an explicitly installed Silero model before constructing native VAD.
+pub fn verified_vad_model(path: &Path) -> anyhow::Result<PathBuf> {
+    verified_model(path, ModelKind::SileroVad, 16000)
 }
 
 fn verified_model(path: &Path, kind: ModelKind, rate: u32) -> anyhow::Result<PathBuf> {
@@ -573,6 +582,7 @@ fn manifest_text(model: &Model) -> anyhow::Result<String> {
             ("tokens", "tokens.txt"),
         ],
         ModelKind::SenseVoice => vec![("model", "model.int8.onnx"), ("tokens", "tokens.txt")],
+        ModelKind::SileroVad => vec![("model", "silero_vad.onnx")],
         ModelKind::Whisper | ModelKind::QwenTranslation => {
             let extension = if model.kind == ModelKind::Whisper {
                 ".bin"

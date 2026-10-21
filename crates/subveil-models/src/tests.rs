@@ -65,7 +65,7 @@ fn server(
 #[test]
 fn curated_catalog_has_pinned_hashes_and_preserves_backend_semantics() -> anyhow::Result<()> {
     let models = catalog()?;
-    assert_eq!(models.len(), 7);
+    assert_eq!(models.len(), 8);
     for model in models {
         let dir = root();
         fs::create_dir_all(&dir)?;

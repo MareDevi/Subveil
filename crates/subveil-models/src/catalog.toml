@@ -163,3 +163,19 @@ sha256 = "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db"
 path = "README.md"
 size = 4856
 sha256 = "fa1fede7f775a20f111cc098c00900092020572ce78976970a5b0ad9ca211999"
+[[models]]
+id = "silero-vad"
+name = "Silero VAD"
+summary = "可选神经语音检测；CPU、16 kHz。比能量阈值更能区分语音与背景声音，仍需按实际内容核对。安装后在模型库启用；不上传音频。"
+repository = "csukuangfj/vad"
+revision = "fba88cd2e921609e7675c3aaf51e0b9b295da4bc"
+kind = "silero_vad"
+sample_rate = 16000
+languages = ["ja", "en", "zh"]
+license = "MIT"
+license_url = "https://github.com/snakers4/silero-vad/blob/master/LICENSE"
+[[models.files]]
+path = "silero_vad.onnx"
+size = 1807522
+sha256 = "a35ebf52fd3ce5f1469b2a36158dba761bc47b973ea3382b3186ca15b1f5af28"
+

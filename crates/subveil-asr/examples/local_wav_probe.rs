@@ -11,8 +11,8 @@ use subveil_core::subtitle::TranscriptEvent;
 fn main() -> anyhow::Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     ensure!(
-        (2..=4).contains(&args.len()),
-        "usage: local_wav_probe MODEL_MANIFEST WAV [LANGUAGE] [cpu|cuda]"
+        (2..=5).contains(&args.len()),
+        "usage: local_wav_probe MODEL_MANIFEST WAV [LANGUAGE] [cpu|cuda] [VAD_MANIFEST]"
     );
     let metadata = subveil_asr::model_metadata(std::path::Path::new(&args[0]))?;
     let language = args.get(2).unwrap_or(&metadata.language).clone();
@@ -40,6 +40,7 @@ fn main() -> anyhow::Result<()> {
             provider: Provider::Local,
             local_model: Some(args[0].clone().into()),
             local_compute: compute,
+            vad_model: args.get(4).map(Into::into),
             language,
             sample_rate: metadata.sample_rate,
             ..Default::default()

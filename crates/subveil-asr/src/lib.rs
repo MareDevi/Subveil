@@ -64,6 +64,8 @@ pub struct Config {
     pub allow_cloud: bool,
     /// Energy segmentation settings.
     pub vad: VadConfig,
+    /// Optional verified Silero manifest. None explicitly uses energy segmentation.
+    pub vad_model: Option<std::path::PathBuf>,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -78,6 +80,7 @@ impl Default for Config {
             sample_rate: 16_000,
             allow_cloud: false,
             vad: VadConfig::default(),
+            vad_model: None,
         }
     }
 }
