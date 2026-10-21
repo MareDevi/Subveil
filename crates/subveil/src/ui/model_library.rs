@@ -40,6 +40,12 @@ impl ControlView {
                 cx,
             ))
             .child(self.render_local_translation(cx))
+            .child(help("卸载仅删除所选目录模型的固定版本缓存；运行或安装期间不可卸载。", cx))
+            .child(row().children([(0u8, "uninstall-asr", "卸载所选识别模型"), (1, "uninstall-mt", "卸载所选翻译模型"), (2, "uninstall-vad", "卸载 VAD")].into_iter().map(|(group, id, label)| {
+                let owner = self.session.clone();
+                Button::new(id).label(label).disabled(session.configuration_busy() || session.audio_active())
+                    .on_click(move |_, window, cx| owner.update(cx, |s,cx|s.uninstall_model(group,window,cx)))
+            })))
             .child(section("研究候选", "以下尚未接入，不能安装或启动；与已支持的模型分开展示。", cx))
             .child(help("Fujie Japanese Streaming Zipformer：原生 RNN-T，320 ms 块；输出假名与标记。CC BY 4.0；本轮下载元数据返回 401，未实测。", cx))
             .child(Link::new("candidate-ja-zipformer").href("https://huggingface.co/fujie/sherpa_onnx_asr_csj_cejc_pron_comp_zipformer_stream_c320_la0").child("日语流式模型卡"))

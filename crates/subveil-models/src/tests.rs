@@ -291,7 +291,7 @@ fn catalog_rejects_traversal_and_unpinned_versions() -> anyhow::Result<()> {
 }
 
 #[test]
-fn cancellation_interrupts_stalled_http_and_cleans_unverified_bytes() -> anyhow::Result<()> {
+fn cancellation_interrupts_stalled_http_without_activation() -> anyhow::Result<()> {
     let model = fixture()?;
     let root = root();
     let shared = Arc::new(state(&model));
@@ -341,11 +341,12 @@ fn cancellation_interrupts_stalled_http_and_cleans_unverified_bytes() -> anyhow:
         .join()
         .map_err(|_| anyhow::anyhow!("server panic"))??;
     assert!(!model.manifest_path(&root).exists());
-    assert!(
-        fs::read_dir(model.manifest_path(&root).parent().context("parent")?)?
-            .filter_map(Result::ok)
-            .all(|entry| !entry.file_name().to_string_lossy().ends_with(".part"))
-    );
+    for entry in fs::read_dir(model.manifest_path(&root).parent().context("parent")?)? {
+        let entry = entry?;
+        if entry.file_name().to_string_lossy().ends_with(".part") {
+            assert!(entry.metadata()?.len() <= 4);
+        }
+    }
     fs::remove_dir_all(root)?;
     Ok(())
 }
@@ -375,5 +376,117 @@ fn whisper_weights_require_matching_kind_rate_and_integrity() -> anyhow::Result<
     fs::write(dir.join("ggml-large-v3-turbo-q5_0.bin"), b"evil")?;
     assert!(verified_whisper_model(&path).is_err());
     fs::remove_dir_all(dir)?;
+    Ok(())
+}
+
+#[test]
+fn resume_validates_range_and_handles_servers_ignoring_it() -> anyhow::Result<()> {
+    for mode in ["range", "ignored", "wrong", "corrupt"] {
+        let model = fixture()?;
+        let root = root();
+        let directory = model
+            .manifest_path(&root)
+            .parent()
+            .context("parent")?
+            .to_path_buf();
+        fs::create_dir_all(&directory)?;
+        for file in &model.files {
+            fs::write(directory.join(&file.path), b"test")?;
+        }
+        let file = &model.files[0];
+        fs::remove_file(directory.join(&file.path))?;
+        let part = directory.join(part_name(file));
+        fs::write(&part, if mode == "corrupt" { b"xx" } else { b"te" })?;
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let origin = format!("http://{}", listener.local_addr()?);
+        listener.set_nonblocking(true)?;
+        let server = thread::spawn(move || -> anyhow::Result<()> {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream.set_read_timeout(Some(Duration::from_secs(1)))?;
+                        let mut bytes = [0; 4096];
+                        let len = stream.read(&mut bytes)?;
+                        assert!(
+                            String::from_utf8_lossy(&bytes[..len])
+                                .to_ascii_lowercase()
+                                .contains("range: bytes=2-")
+                        );
+                        let response = match mode {
+                            "range" | "corrupt" => {
+                                "HTTP/1.1 206 Partial Content\r\nContent-Length: 2\r\nContent-Range: bytes 2-3/4\r\nConnection: close\r\n\r\nst"
+                            }
+                            "ignored" => {
+                                "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\ntest"
+                            }
+                            _ => {
+                                "HTTP/1.1 206 Partial Content\r\nContent-Length: 2\r\nContent-Range: bytes 1-2/4\r\nConnection: close\r\n\r\nst"
+                            }
+                        };
+                        stream.write_all(response.as_bytes())?;
+                        return Ok(());
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(e) => return Err(e.into()),
+                }
+                ensure!(Instant::now() < deadline, "missing resume request");
+                thread::sleep(Duration::from_millis(5));
+            }
+        });
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let result = runtime.block_on(install(&model, &root, &state(&model), Some(&origin), true));
+        server
+            .join()
+            .map_err(|_| anyhow::anyhow!("server panic"))??;
+        if mode == "corrupt" {
+            assert!(result.is_err());
+            assert!(!model.manifest_path(&root).exists());
+            assert!(!part.exists());
+        } else if mode == "wrong" {
+            assert!(result.is_err());
+            assert!(!model.manifest_path(&root).exists());
+            assert_eq!(fs::read(part)?, b"te");
+        } else {
+            assert!(result?.is_file());
+            assert_eq!(fs::read(directory.join(&file.path))?, b"test");
+            assert!(!part.exists());
+        }
+        fs::remove_dir_all(root)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn uninstall_respects_install_lock_and_preserves_unknown_files() -> anyhow::Result<()> {
+    let model = fixture()?;
+    let root = root();
+    let directory = model
+        .manifest_path(&root)
+        .parent()
+        .context("parent")?
+        .to_path_buf();
+    fs::create_dir_all(&directory)?;
+    fs::write(directory.join("model.toml"), "manifest")?;
+    for file in &model.files {
+        fs::write(directory.join(&file.path), b"test")?;
+    }
+    fs::write(directory.join("user-notes.txt"), b"preserve")?;
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(directory.join(".install.lock"))?;
+    lock.try_lock()?;
+    assert!(model.remove_cached(&root).is_err());
+    assert!(model.manifest_path(&root).exists());
+    drop(lock);
+    assert!(model.remove_cached(&root)? >= model.size());
+    assert!(!model.manifest_path(&root).exists());
+    assert_eq!(fs::read(directory.join("user-notes.txt"))?, b"preserve");
+    assert!(directory.join(".install.lock").exists());
+    fs::remove_dir_all(root)?;
     Ok(())
 }

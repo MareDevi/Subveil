@@ -85,6 +85,50 @@ pub struct Model {
     pub files: Vec<ModelFile>,
 }
 impl Model {
+    /// Remove this curated revision's files under an exclusive installer lock.
+    /// Unknown files and the lock inode remain; imported models are never traversed.
+    pub fn remove_cached(&self, root: &Path) -> anyhow::Result<u64> {
+        self.validate()?;
+        let manifest = self.manifest_path(root);
+        let directory = manifest.parent().context("模型目录无效")?;
+        if !directory.exists() {
+            return Ok(0);
+        }
+        ensure!(
+            directory.canonicalize()?.starts_with(root.canonicalize()?),
+            "模型目录越出缓存根目录"
+        );
+        let lock = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(directory.join(".install.lock"))?;
+        lock.try_lock()
+            .map_err(|_| anyhow::anyhow!("模型正在安装；请稍后卸载"))?;
+        let names = std::iter::once("model.toml".to_string()).chain(
+            self.files
+                .iter()
+                .flat_map(|f| [f.path.clone(), part_name(f)]),
+        );
+        let mut removed = 0_u64;
+        for name in names {
+            let path = directory.join(name);
+            match fs::symlink_metadata(&path) {
+                Ok(metadata) => {
+                    ensure!(
+                        metadata.is_file() || metadata.is_symlink(),
+                        "模型缓存项不是文件"
+                    );
+                    fs::remove_file(path)?;
+                    removed = removed.saturating_add(metadata.len());
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(removed)
+    }
     /// Full publisher URL, suitable for disclosure before installation.
     pub fn source(&self) -> String {
         format!(
@@ -346,7 +390,7 @@ impl Download {
                 if let Ok(mut snapshot) = state.snapshot.lock() {
                     snapshot.finished = true;
                     if state.cancelled() {
-                        snapshot.status = "下载已取消；已验证文件保留供重试复用".into();
+                        snapshot.status = "下载已取消；已验证文件与续传片段保留供重试复用".into();
                     } else {
                         match result {
                             Ok(manifest) => {
@@ -381,6 +425,9 @@ impl Drop for Temporary {
         // A crash may leave .part files; next installer removes them while holding the package lock.
         let _ = fs::remove_file(&self.0);
     }
+}
+fn part_name(file: &ModelFile) -> String {
+    format!(".{}.{}.part", file.path, file.sha256)
 }
 fn valid_file(path: &Path, file: &ModelFile, shared: &Shared) -> anyhow::Result<bool> {
     let metadata = match fs::metadata(path) {
@@ -439,7 +486,7 @@ async fn install_with_cancel(
     let install = install(model, root, shared, test_origin, allow_network);
     tokio::pin!(install);
     tokio::select! {
-        result = &mut install => result,
+        result = &mut install => if shared.cancelled() { Err(anyhow::anyhow!("下载已取消")) } else { result },
         _ = async { while !shared.cancelled() { tokio::time::sleep(Duration::from_millis(25)).await; } } => Err(anyhow::anyhow!("下载已取消")),
     }
 }
@@ -467,9 +514,13 @@ async fn install(
     lock.try_lock()
         .map_err(|_| anyhow::anyhow!("该模型正在被另一个进程安装，或文件系统不支持安装锁"))?;
     // The OS releases the lock after a crash; do not unlink its inode while installers may wait on it.
+    // Keep only this immutable package's resumable files; old random temporaries
+    // and abandoned manifest writes cannot participate in activation.
+    let resumable: std::collections::HashSet<_> = model.files.iter().map(part_name).collect();
     for entry in fs::read_dir(directory)? {
         let entry = entry?;
-        if entry.file_type()?.is_file() && entry.file_name().to_string_lossy().ends_with(".part") {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if entry.file_type()?.is_file() && name.ends_with(".part") && !resumable.contains(&name) {
             fs::remove_file(entry.path())?;
         }
     }
@@ -488,8 +539,33 @@ async fn install(
             allow_network,
             "离线模式：模型文件缺失或损坏；请联网安装后重试"
         );
+        let partial = directory.join(part_name(file));
+        let mut offset = match fs::symlink_metadata(&partial) {
+            Ok(metadata) => {
+                ensure!(metadata.is_file(), "下载临时文件类型无效");
+                if metadata.len() > file.size {
+                    fs::remove_file(&partial)?;
+                    0
+                } else {
+                    metadata.len()
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(error) => return Err(error.into()),
+        };
+        // A previous process may have stopped after its final write, before rename.
+        if offset == file.size {
+            if valid_file(&partial, file, shared)? {
+                fs::rename(&partial, &destination)?;
+                completed += file.size;
+                continue;
+            }
+            fs::remove_file(&partial)?;
+            offset = 0;
+        }
         ensure!(
-            fs2::available_space(directory)? >= file.size.saturating_add(1_048_576),
+            fs2::available_space(directory)?
+                >= file.size.saturating_sub(offset).saturating_add(1_048_576),
             "磁盘空间不足；请释放空间后重试"
         );
         let url = match test_origin {
@@ -499,49 +575,73 @@ async fn install(
                 model.repository, model.revision, file.path
             ),
         };
-        let mut response = client
+        let mut request = client
             .get(url)
-            .send()
-            .await
-            .context("模型下载连接失败或超时")?;
-        ensure!(
-            response.status().is_success(),
-            "模型下载返回 HTTP {}",
-            response.status().as_u16()
-        );
-        if let Some(length) = response.content_length() {
-            ensure!(length == file.size, "模型文件长度与目录不符");
+            .header(reqwest::header::ACCEPT_ENCODING, "identity");
+        if offset > 0 {
+            request = request.header(reqwest::header::RANGE, format!("bytes={offset}-"));
         }
-        let temporary =
-            Temporary(directory.join(format!(".{}-{}.part", file.path, uuid::Uuid::new_v4())));
+        let mut response = request.send().await.context("模型下载连接失败或超时")?;
+        let status = response.status();
+        if status == reqwest::StatusCode::PARTIAL_CONTENT {
+            let expected = format!("bytes {offset}-{}/{}", file.size - 1, file.size);
+            ensure!(
+                response
+                    .headers()
+                    .get(reqwest::header::CONTENT_RANGE)
+                    .and_then(|s| s.to_str().ok())
+                    == Some(expected.as_str()),
+                "模型续传范围与目录不符；保留片段供重试"
+            );
+        } else {
+            ensure!(
+                status == reqwest::StatusCode::OK,
+                "模型下载返回 HTTP {}",
+                status.as_u16()
+            );
+            // Servers which ignore Range must replace, never append the full body.
+            offset = 0;
+        }
+        if let Some(length) = response.content_length() {
+            ensure!(length == file.size - offset, "模型文件长度与目录不符");
+        }
         let mut output = fs::OpenOptions::new()
-            .create_new(true)
+            .create(true)
             .write(true)
-            .open(&temporary.0)
+            .truncate(offset == 0)
+            .append(offset > 0)
+            .open(&partial)
             .context("无法写入下载文件；检查磁盘空间与权限")?;
-        let mut received = 0_u64;
-        let mut hash = Sha256::new();
-        while let Some(chunk) = response.chunk().await.context("模型下载中断或超时")? {
-            ensure!(!shared.cancelled(), "下载已取消");
+        let mut received = offset;
+        shared.progress(completed + received, format!("续传 {}", file.path));
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .context("模型下载中断或超时；已保留片段")?
+        {
+            ensure!(!shared.cancelled(), "下载已取消；已保留片段");
             received = received
                 .checked_add(chunk.len() as u64)
                 .context("模型文件长度溢出")?;
-            ensure!(received <= file.size, "模型文件超过目录声明的大小");
+            if received > file.size {
+                drop(output);
+                fs::remove_file(&partial)?;
+                anyhow::bail!("模型文件超过目录声明的大小；未激活");
+            }
             output
                 .write_all(&chunk)
                 .context("模型写入失败；检查磁盘空间与权限")?;
-            hash.update(&chunk);
             shared.progress(completed + received, format!("下载 {}", file.path));
         }
-        ensure!(
-            received == file.size
-                && format!("{:x}", hash.finalize()).eq_ignore_ascii_case(&file.sha256),
-            "模型长度或 SHA-256 校验失败；未激活"
-        );
         output.sync_all()?;
         drop(output);
+        ensure!(received == file.size, "模型下载不完整；已保留片段");
+        if !valid_file(&partial, file, shared)? {
+            fs::remove_file(&partial)?;
+            anyhow::bail!("模型 SHA-256 校验失败；片段已删除，未激活");
+        }
         ensure!(!shared.cancelled(), "下载已取消");
-        fs::rename(&temporary.0, &destination).context("无法发布已校验模型文件")?;
+        fs::rename(&partial, &destination).context("无法发布已校验模型文件")?;
         completed += received;
     }
     ensure!(!shared.cancelled(), "下载已取消");

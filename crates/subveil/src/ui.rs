@@ -142,6 +142,7 @@ fn section(title: &'static str, description: &'static str, cx: &App) -> gpui_kit
 }
 
 pub struct ControlView {
+    history_search: Entity<InputState>,
     profile_name: Entity<InputState>,
     choices: Vec<ChoiceView>,
     audio_source: Entity<SelectState<Vec<SharedString>>>,
@@ -184,6 +185,8 @@ impl ControlView {
         }
     }
     fn new(session: Entity<Session>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let history_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索原文或译文"));
+        let search_subscription = cx.observe(&history_search, |_, _, cx| cx.notify());
         let profile_name =
             cx.new(|cx| InputState::new(window, cx).placeholder("为当前服务配置命名"));
         let current = session.read(cx).asr_config.provider;
@@ -502,8 +505,10 @@ impl ControlView {
             text_selected,
         ]);
         input_subscriptions.extend(choice_subscriptions);
+        input_subscriptions.push(search_subscription);
         let credentials_generation = session.read(cx).credentials_generation;
         Self {
+            history_search,
             profile_name,
             choices,
             audio_source,

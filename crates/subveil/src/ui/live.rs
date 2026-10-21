@@ -46,7 +46,22 @@ impl ControlView {
                 .child(help("配置语音服务以开始识别，或运行离线演示预览字幕。", cx));
         }
         let mut history = column().gap_0();
+        let query = self.history_search.read(cx).value().to_lowercase();
         for entry in session.subtitles.history().iter().rev() {
+            if session.archive.is_some() {
+                break;
+            }
+            let translated = match &entry.translation {
+                TranslationState::Complete(t)
+                | TranslationState::Streaming(t)
+                | TranslationState::PendingWithPreview(t) => t.as_str(),
+                _ => "",
+            };
+            if !entry.transcript.text.to_lowercase().contains(&query)
+                && !translated.to_lowercase().contains(&query)
+            {
+                continue;
+            }
             history = history.child(
                 div()
                     .id(("segment", entry.transcript.key.segment_id))
@@ -82,7 +97,30 @@ impl ControlView {
                     )),
             );
         }
-        if session.subtitles.history().is_empty() {
+        if let Some(archive) = &session.archive {
+            for (index, record) in archive.records.iter().enumerate().rev() {
+                if !record.source.to_lowercase().contains(&query)
+                    && !record
+                        .translation
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains(&query)
+                {
+                    continue;
+                }
+                history = history.child(
+                    div()
+                        .id(("saved-segment", index))
+                        .py_3()
+                        .border_b_1()
+                        .border_color(cx.theme().border)
+                        .child(record.source.clone())
+                        .child(help(record.translation.clone().unwrap_or_default(), cx)),
+                );
+            }
+        }
+        if session.subtitles.history().is_empty() && session.archive.is_none() {
             history = history.child(help("会话开始后，保留的原文与译文将显示在这里。", cx));
         }
         column()
@@ -286,6 +324,59 @@ impl ControlView {
                                 || session.asr_stopping
                                 || session.subtitles.history().is_empty(),
                         ),
+                    ),
+            )
+            .child(help(session.archive_status.clone(), cx))
+            .child(field(
+                "搜索字幕",
+                Input::new(&self.history_search)
+                    .id("history-search")
+                    .aria_label("搜索原文或译文"),
+                cx,
+            ))
+            .child(
+                row().children(
+                    [
+                        ("toml", "保存字幕档案"),
+                        ("txt", "导出 TXT"),
+                        ("md", "导出 Markdown"),
+                        ("srt", "导出 SRT"),
+                    ]
+                    .into_iter()
+                    .map(|(format, label)| {
+                        let owner = self.session.clone();
+                        Button::new(format)
+                            .label(label)
+                            .disabled(session.archive_busy)
+                            .on_click(move |_, _, cx| {
+                                owner.update(cx, |s, cx| s.export_archive(format, cx))
+                            })
+                    }),
+                ),
+            )
+            .child(
+                row()
+                    .child(
+                        button(
+                            "open-archive",
+                            "打开字幕档案…",
+                            &self.session,
+                            Session::open_archive,
+                        )
+                        .disabled(session.archive_busy),
+                    )
+                    .child(
+                        button(
+                            "close-archive",
+                            "返回当前会话",
+                            &self.session,
+                            |s, cx| {
+                                s.archive = None;
+                                s.archive_status = "已返回当前会话；不会自动保存字幕".into();
+                                cx.notify();
+                            },
+                        )
+                        .disabled(session.archive.is_none() || session.archive_busy),
                     ),
             )
             .child(history)

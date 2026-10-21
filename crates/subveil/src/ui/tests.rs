@@ -44,6 +44,33 @@ fn stop_preserves_history_clear_rejects_running_and_navigation_restores_focus(
         window.click("stop", cx);
         assert!(!session.read(cx).running);
         assert_eq!(session.read(cx).subtitles.history().len(), 1);
+        window.click("toml", cx);
+    })
+    .expect("export through production button");
+    cx.run_until_parked();
+    assert!(cx.did_prompt_for_new_path());
+    let path =
+        std::env::temp_dir().join(format!("subveil-view-export-{}.toml", std::process::id()));
+    assert!(!path.exists(), "no automatic transcript write");
+    cx.simulate_new_path_selection(|_| Some(path.clone()));
+    cx.run_until_parked();
+    let saved = crate::archive::Archive::load(&path).expect("read explicit export");
+    assert_eq!(saved.records.len(), 1);
+    assert!(saved.records[0].translation.is_some());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&path)
+                .expect("metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+    std::fs::remove_file(path).expect("remove test export");
+    cx.update_window(handle, |_, window, cx| {
         window.click("clear-history", cx);
         assert!(session.read(cx).subtitles.history().is_empty());
         window.click("configure-session", cx);

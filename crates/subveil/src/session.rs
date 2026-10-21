@@ -12,11 +12,16 @@ use crate::{
     overlay::{self, OverlayView},
     storage, ui,
 };
+mod archives;
 mod configuration;
+mod model_operations;
 mod profiles;
 pub(crate) use configuration::Choice;
 
 pub struct Session {
+    pub archive: Option<crate::archive::Archive>,
+    pub archive_busy: bool,
+    pub archive_status: String,
     pub subtitles: SubtitleState,
     pub settings: OverlaySettings,
     pub running: bool,
@@ -315,6 +320,9 @@ impl Session {
         timer: Task<()>,
     ) -> Self {
         Self {
+            archive: None,
+            archive_busy: false,
+            archive_status: "记录默认只在内存；保存或导出会把原文和译文写入所选文件".into(),
             subtitles: SubtitleState::new(1, settings.history_limit, settings.ttl_ms),
             settings,
             running: false,

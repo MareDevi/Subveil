@@ -1,3 +1,4 @@
+mod archive;
 mod credentials;
 mod mock;
 mod models;
