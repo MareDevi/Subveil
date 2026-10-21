@@ -76,3 +76,17 @@ DeepL 配置：
 云端任务从提交起总期限 6 秒，包含排队、网络、响应读取和重试；HTTP 请求另有 5 秒超时。429 / 5xx 最多重试两次，退避 250 / 500 ms，仍受总期限约束。错误只影响对应译文，ASR 继续处理。结果必须匹配 Session / Segment / revision，且仍为 Pending、未过期，才能更新字幕。取消会丢弃网络 future。
 
 真实日语/英语识别质量、字幕延迟、收费与供应商兼容性需要使用用户模型及账号另行验收。离线协议测试不代表这些项目通过。
+
+## 应用内模型目录与增量翻译（2026-10-21）
+
+可安装目录新增 Whisper Small Q5_1（190,085,487 字节权重，MIT）与 Qwen2.5 0.5B Instruct Q4_K_M（491,400,032 字节权重，Apache-2.0）。沿用官方固定 revision、大小、SHA-256 校验与显式下载。Whisper Small 仍是短块离线推理；Qwen 0.5B 为资源受限对照，不保证比 1.5B 准确或更快。模型库可切换两种翻译模型，导入和恢复时同步当前选择。
+
+「语音服务」页的「提前翻译稳定原文」默认关闭。开启后使用最近三次 Partial 的共同前缀，英语截到词或标点边界，中日文要求分句标点；至少 12 个字符、稳定阶段等待 600 ms、同段提交间隔至少 1500 ms。连续增长不无限重置稳定等待。阈值是调度规则，不是性能承诺。
+
+请求关联 session、segment、请求 revision 及实际发送的稳定源前缀。原文尾部继续增长时，仍可接收该前缀的待处理译文；前缀被改写、较新请求取代、Final 到来、段被淘汰或会话停止时拒绝旧结果。该规则不同于忽略 revision 后把旧整句译文套给新原文。前缀只是临时假设，不成为永久提交。控制窗口与浮窗明确显示「临时译文」；修订期间保留仍兼容的草稿。
+
+Final 始终重新翻译以纠正临时结果；仅 Final 源句进入云端文字翻译的最多三句上下文。本地后端不维护该历史。HTTP worker 可取消被新请求取代的工作；本地 worker 跳过过时排队请求，原生推理中的任务仍须等待当前推理返回，其结果再过状态检查。所有队列保持有界。
+
+新增研究候选仅供查看，不能安装或启动：日语 Fujie Streaming Zipformer（CC BY 4.0，假名及标记输出，下载元数据本轮 401）、Vosk、缓存式 NeMo FastConformer、Qwen3-ASR、HY-MT1.5、MarianMT / OPUS-MT、NLLB、M2M100 与 SeamlessStreaming。后者 CC BY-NC 4.0，不作为默认后端。未接入的运行时、质量、设备性能与商业许可不能由目录展示推导。
+
+可用 `mise run offline:probe -- ASR_MANIFEST TRANSLATION_MANIFEST WAV en cpu --incremental` 在公开 WAV 上验证请求提交、临时译文接收与 Final 纠正；不上传或打印文本。具体测量见 [本轮验收](cloud-streaming-validation.md)。

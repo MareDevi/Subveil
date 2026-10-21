@@ -1,5 +1,15 @@
 # M00 技术调研
 
+## 云配置与稳定 Partial 调度（2026-10-21）
+
+本轮先核对 Context7 的 OpenAI Models、腾讯 Speech SDK 与 sherpa-onnx 官方在线识别示例，再查各厂商官方文档。模型枚举并非统一 API：OpenAI、Gemini、Deepgram 提供模型目录；Azure 部署枚举需要 ARM 管理权限。语音集成必须按协议过滤，不能把 Flux、通用 Realtime 或任意聊天模型混入现有语音端点。详见 [调研与计划](cloud-streaming-plan.md)、[云服务配置](cloud-services.md)。
+
+GUI 凭据通过显式快照传递，保留 CLI 环境兼容，不调用进程环境写入。使用现有系统 `secret-tool` 与 Secret Service 提供可选持久化，后台执行并限制时间、输入输出大小；未增加外部 crate 版本，仅给现有 workspace 包声明已锁定的 tokio 依赖。系统存储不可用时显示错误并保留当前进程配置。
+
+GPUI 保持 0.8.0。InputState 与 SelectState 由 ControlView 持有，协议配置与异步工作由 Session 持有；使用原生遮蔽 Input、Select、Switch、Button 与外部 Link，沿用主题、滚动区和 Ctrl+2 / Tab 键盘路径。已核对锁定源码的 set_items、set_selected_value、set_value，禁止 render 内启动网络或重建输入状态。
+
+Zipformer 继续使用现有 accept_waveform / is_ready / decode / get_result 状态复用。新增的是可修订文字调度，不把 Qwen 逐 token 生成、Whisper 分块或 VAD 包装称为原生同时翻译。稳定前缀请求绑定独立请求 revision 和前缀，尾部增长可以保留请求；改写、Final、停止与较新请求会使旧请求失效。阈值与验证见 [本地链路](local-asr-and-translation.md)。
+
 ## 字幕可靠性修复（2026-10-21）
 
 本次复核用户提供的审查结论：SubtitleState 的显示 TTL 同时限制 finish_translation / matching，确实会丢弃翻译 worker 截止时间内的迟到结果；浮窗只使用 current；stop 调用 reset；SenseVoice 在 PCM 消费循环中 decode。修复设计及边界见 [subtitle-reliability.md](subtitle-reliability.md)。

@@ -66,7 +66,7 @@ mise run audio:probe -- 60 24000
 
 在「语音服务」选择服务、源语种提示与目标语种。接口要求固定采样率时自动使用 16 或 24 kHz；自动识别服务会明确显示「自动识别」。停止独立采集后点击「同意上传并开始」才向界面列出的目标发送系统音频；Mock 仅输出样本。
 
-服务凭据分别从环境变量读取，不持久化密钥。接口自带译文可随原文修订，迟到的旧 revision 不会覆盖新字幕。OpenAI、Azure、Google 以有界连续窗口展示，不伪造逐句 Final；其他协议使用服务本身的句段标识。服务生成的音频不播放、不保存。
+GUI 凭据从应用内配置读取，可选择保存到系统密钥环；CLI 保留环境变量兼容。接口自带译文可随原文修订，迟到的旧 revision 不会覆盖新字幕。OpenAI、Azure、Google 以有界连续窗口展示，不伪造逐句 Final；其他协议使用服务本身的句段标识。服务生成的音频不播放、不保存。
 
 完整服务清单、环境变量、模型与部署要求、协议差异见 [云语音服务配置](docs/cloud-services.md)。本地 ASR、模型清单与独立文字翻译见 [M04 配置](docs/local-asr-and-translation.md)。
 
@@ -79,6 +79,10 @@ mise run asr:check
 ```
 
 诊断默认不输出识别文本，单次最多 60 秒；只有显式 `--print-transcripts` 才打印原文和译文。`asr:check` 检查所有 ASR 目标，并链接本地模型运行库。配置和协议测试通过不等于真实服务质量、权限或费用验收通过。
+
+GUI 在「语音服务」直接填写凭据、端点和部署名，可选系统密钥环保存。OpenAI / Gemini / Deepgram 可查询兼容语音模型；独立 OpenAI-compatible 翻译可获取文字模型。环境变量仅保留给 CLI 诊断。模型发现不发送字幕，音频与文字上传仍分别授权。
+
+本地目录新增 Whisper Small 和 Qwen2.5 0.5B。实验性「增量翻译」允许 Zipformer 的稳定 Partial 提前翻译并在 Final 纠正；Whisper / SenseVoice 仍为离线分块。见 [本轮说明与验收](docs/cloud-streaming-validation.md)。
 
 ## 字幕样式
 

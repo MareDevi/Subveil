@@ -29,4 +29,4 @@
 - 百度实时语音翻译： https://cloud.baidu.com/doc/MT/s/Sl9p2h5k9
 - 日语实验模型： https://huggingface.co/fujie/sherpa_onnx_asr_csj_cejc_pron_comp_zipformer_stream_c320_la0 ，模型卡为 CC BY 4.0，输出假名及标记；公开卡片可读，但本轮 Hugging Face API 返回 401，不能编造校验值或本机 RTF。
 
-阿里、火山与部分模型原始页面本轮抓取失败；沿用项目已记录的官方协议地址与限制，不以第三方资料作为新增 API 依据。Context7 核对 OpenAI 模型列表、腾讯鉴权及 sherpa 在线状态复用。
+阿里实时翻译、Gemini Live、xAI Voice 的官方页面已复核；阿里模型枚举页面、火山及部分模型原始页面本轮抓取失败，相关部分沿用项目已记录的官方协议地址与限制，不以第三方资料作为新增 API 依据。Context7 核对 OpenAI 模型列表、腾讯鉴权及 sherpa 在线状态复用。
