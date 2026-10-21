@@ -35,7 +35,7 @@ mise run doctor:cuda
 mise run models:cuda
 ```
 
-控制窗口分为「实时字幕、语音服务、字幕样式、运行诊断」四个工作区。`Ctrl+1` 至 `Ctrl+4` 切换工作区，`Ctrl+Shift+O` 显示或隐藏浮窗，`Ctrl+S` 保存样式，`Ctrl+Shift+L` 切换明暗外观。恢复入口支持 `Enter` 恢复控制窗口。主题选择仅用于当前进程。
+控制窗口使用 GPUI Kit 原生侧栏，包含「实时字幕、语音服务、模型库、字幕样式、运行诊断」五页。`Ctrl+1` 至 `Ctrl+4` 依次打开实时字幕、语音服务、字幕样式、运行诊断，`Ctrl+5` 打开模型库，`Ctrl+B` 折叠或展开侧栏。`Ctrl+Shift+O` 显示或隐藏浮窗，`Ctrl+S` 保存样式，`Ctrl+Shift+L` 切换明暗外观。恢复入口支持 `Enter` 恢复控制窗口。主题与侧栏折叠不持久化。模型安装、来源与许可证在独立「模型库」中查看；开始识别与上传授权仍在「语音服务」。设计与实测记录见 [原生界面重构](docs/ui-redesign.md)。
 
 控制窗口可在 Wayland 或 X11 会话运行；字幕浮窗需要支持 `zwlr_layer_shell_v1` 的 Linux Wayland compositor。X11 会明确提示不支持浮窗，不创建伪置顶窗口。
 

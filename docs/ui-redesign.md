@@ -8,6 +8,18 @@
 
 保留原生窗口装饰、字幕浮窗及恢复窗口。表单使用一致的标签宽度与内容轨道，窄窗口允许控件换行。浅色、深色、最小尺寸、键盘导航、离线演示和关闭恢复均纳入验收；未执行项目明确记录。
 
+### 第二轮实施与验收
+
+已实现五页 Sidebar 导航及图标折叠、固定工具栏、StatusBar、独立模型库、真实下载 Progress、离线 Switch、对齐表单、样式分区和双语历史。导航切换将焦点交回工作区，避免旧页面控件继续持有焦点。控制页面拆为 `ui/live.rs`、`services.rs`、`model_library.rs`、`appearance.rs`、`diagnostics.rs`，会话与推理仍由原 Session 管理。模型安装与设置在恢复、识别、导入或另一类模型下载期间禁用；取消入口仍可用。保留 gpui-kit 0.8.0 与全部原有业务依赖。
+
+最终 `mise run check` 退出码 0：格式、锁定构建、严格 Clippy、93 项测试通过。下载器测试使用本机 HTTP fixture；沙箱禁用 socket 导致的 `Operation not permitted` 已在沙箱外复跑通过。`git diff --check` 通过。
+
+真实 Hyprland / Wayland 限时离线演示中，逐页截图检查了实时、服务、模型库、样式、诊断。默认 1120×800 与最小 760×560 逻辑尺寸的工具栏、导航和状态栏可见，内容区独立滚动；明暗主题与 Ctrl+B 图标折叠均正常。按截图像素检查：侧栏/工具栏头部共享边界，内容标题、预览与历史使用同一左侧对齐线；表单标签与控件保持两条固定对齐线。未验证其他显示比例和应用 rem 缩放。
+
+Ctrl+1–5、Ctrl+Shift+L、Ctrl+S 与恢复窗口 Enter 已实测。Hyprland Lua `send_shortcut` 的数字键用 `code:10` 至 `code:14` 注入；直接传数字字符串不能作为有效导航证据。保存写入 `/tmp/subveil-sidebar-final.toml`。关闭控制窗口后出现恢复窗口，Enter 恢复后 PID 29778 不变。截图、日志和测试配置仅保存 `/tmp`。最终 GUI 日志未出现 panic；系统现有 LSFG Vulkan 隐式层仍有加载警告，未阻止窗口渲染，没有更改系统驱动。
+
+本轮未重新执行真实模型下载、GPU 推理或付费云端调用；沿用现有业务测试与先前推理验收，不将本轮 UI 验收描述为新的推理证明。下载进度的真实网络交互、所有 Select 的方向键/Escape 路径、屏幕阅读器、多显示比例、其他 compositor/平台与长期稳定性仍待验证。当前页面、侧栏折叠和明暗主题仅在窗口/进程内保存，不持久化。
+
 ## 调研与约束
 
 已通过 Context7 查询 `/longbridge/gpui-kit`，并读取 GPUI Kit 的 Design Guides、Coding Guides 及组件发布源码。网站当前展示 0.7.3；crates.io 实际提供 `gpui-kit 0.8.0`，其 GPUI 为 `gpui-pre =0.3.9`，Component 为 0.8.0，与现有工程兼容。以发布包源码核对 API，不按网站示例降级。
