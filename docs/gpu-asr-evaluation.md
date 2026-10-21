@@ -1,6 +1,6 @@
 # GPU ASR 选型与性能验收
 
-日期：2026-10-21，Asia/Shanghai。本文记录用户参考材料的采纳结论与待验证目标，不是新增后端的交付声明。
+日期：2026-10-21，Asia/Shanghai。本文保留选型调研与目标口径；已完成实现和实测结果见 [GPU ASR 使用与验收](gpu-asr-validation.md)，以下“当前基线”指调研开始时的 M05 版本。
 
 ## 当前基线与选型
 
@@ -51,3 +51,9 @@ Whisper 使用原语种转写，再由文本模型生成中文；不能将 Whisp
 - [faster-whisper 官方基准](https://github.com/SYSTRAN/faster-whisper#benchmark)：13 分钟音频、RTX 3070 Ti 8GB、large-v2、beam 5；非批量 FP16 为 63 秒 / 4525 MB，INT8 为 59 秒 / 2926 MB。批量结果须单独列出。用户材料中的 large-v3 52 秒、turbo 19 秒与 2.48 GiB 缺少可复核的同条件原始来源，本轮不写入验收数据。
 
 本次只核对优先候选及性能口径，未全面验证参考材料中 Seamless / Canary 的参数量、显存和部署陈述。
+
+## 实施决定（2026-10-21）
+
+用户要求完成实现与验证。新增独立 `subveil-whisper` Rust 推理程序，固定 whisper-rs 0.16.0 / whisper-rs-sys 0.15.0；不与 sherpa 或 llama 原生库混合链接。默认构建保留 CPU，CUDA 通过显式 mise 任务构建。CPU / CUDA 分别选择，CUDA 不可用时报错，不自动降级。模型库增加固定版本 large-v3-turbo Q5_0（574041195 字节），复用显式安装和校验。
+
+字幕采用最长 2 秒的有界能量分段（只提交 Final），连续讲话也会切块；这允许句中字幕，但可能切断词句，质量须单独比较。保留原模型分段语义。运行设备和短块长度属于 Session 设置，由原生 Button 切换，禁用会话中更改；状态和错误在现有模型区域显示，键盘使用标准组件 Tab / Enter 路径。

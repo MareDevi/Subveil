@@ -1,18 +1,19 @@
 # 本地 ASR 与文字翻译（M04 / M05）
 
-M05 增加 Qwen GGUF 本地文字翻译、Vulkan GPU 选择和完全离线模式。当前使用步骤及验收见 [M05 使用与验收](m05-validation.md)。语音识别保持 CPU；GPU 加速文字翻译，不代表 sherpa CUDA 已支持。
+M05 增加 Qwen GGUF 本地文字翻译、Vulkan GPU 选择和完全离线模式。当前使用步骤及验收见 [M05 使用与验收](m05-validation.md)。SenseVoice / Zipformer 保持 CPU；新增 Whisper Turbo CPU / CUDA 短块后端，见 [GPU ASR 使用与验收](gpu-asr-validation.md)。Whisper CUDA 与 Qwen Vulkan 分别选择，不代表 sherpa CUDA 已支持。
 
 ## 应用内模型选择与下载
 
-运行 `mise run models`，或在控制窗口「语音服务」选择「本地 sherpa-onnx」。从「下载模型」选择候选，核对来源、许可证、下载量和运行模式，点击「安装并选用」。安装完成后再点击「开始本地识别」。安装本身不会开始音频采集；本地识别不会上传音频。
+运行 `mise run models`，或在控制窗口「语音服务」选择「本地语音识别」。从「下载模型」选择候选，核对来源、许可证、下载量和运行模式，点击「安装并选用」。安装完成后再点击「开始本地识别」。安装本身不会开始音频采集；本地识别不会上传音频。
 
 | 模型 | 语言 | 下载量 | 运行方式 | 权重许可证 |
 | --- | --- | --- | --- | --- |
+| Whisper large-v3-turbo Q5_0 | 日 / 英 / 中 | 574.0 MB | CPU / CUDA，2 / 4 / 8 秒短块，仅 Final | MIT |
 | SenseVoice Small INT8 | 日 / 英 / 中 | 239.5 MB | CPU，VAD 分段后识别，仅 Final | FunASR Model License 1.1，自定义条款 |
 | Zipformer English 20M INT8 | 英 | 43.6 MB | CPU，真正 streaming，Partial / Final | Apache-2.0 |
 | Zipformer Chinese / English INT8 | 英 / 中 | 198.3 MB | CPU，真正 streaming，Partial / Final | Apache-2.0 |
 
-日语优先选择 SenseVoice；英文低延迟先试 Zipformer 20M；中英文混合场景再比较中英 Zipformer。语言能力取决于权重，不能通过修改清单增加语言。SenseVoice 上游模型卡引用自定义 [FunASR Model License](https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE)，不能套用运行库 Apache-2.0 或代码许可证。
+RTX CUDA 场景可选择 Whisper Turbo，按内容比较 2 / 4 / 8 秒分块；CPU 日语优先选择 SenseVoice，英文低延迟先试 Zipformer 20M，中英文混合场景再比较中英 Zipformer。语言能力取决于权重，不能通过修改清单增加语言。SenseVoice 上游模型卡引用自定义 [FunASR Model License](https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE)，不能套用运行库 Apache-2.0 或代码许可证。
 
 模型保存在 `$XDG_DATA_HOME/subveil/models`；未设置或不是绝对路径时，使用 `$HOME/.local/share/subveil/models`。每个模型按 ID 与固定 revision 分目录。应用先流式下载到临时文件，核对精确长度和 SHA-256，再原子发布文件；全部文件通过后才生成运行清单。目录内含发布者 README 和来源、许可信息。
 
@@ -32,7 +33,7 @@ SenseVoice 使用 offline API，按能量 VAD 结束的语音段识别，默认�
 
 仍支持「导入已有模型…」。Streaming 清单示例为 `config/local-model.example.toml`；旧清单缺少 `kind` 与 `languages` 时按原 streaming 单语义读取。新增 `kind = "sense_voice"` 时使用 `[model]`、`[tokens]`，并要求 16 kHz；不要提供 encoder / decoder / joiner。`languages` 可列 en / ja / zh，`language` 为默认源语种。界面按模型声明切换源语种。所有文件在后台校验后才加载。
 
-官方日语 ReazonSpeech offline Zipformer、Whisper 和 Paraformer 暂不支持此导入后端。模型清单中的来源和许可是提供方声明，不是应用的法律认证。未完成句子在停止时可能被丢弃。
+官方日语 ReazonSpeech offline Zipformer 和 Paraformer 暂不支持此导入后端。Whisper 使用独立 GGML 清单，示例见 `config/whisper-model.example.toml`；不能将 Whisper 文件作为 sherpa transducer 导入。模型清单中的来源和许可是提供方声明，不是应用的法律认证。未完成句子在停止时可能被丢弃。
 
 无窗口诊断：
 

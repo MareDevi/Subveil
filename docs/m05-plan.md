@@ -22,7 +22,7 @@
 
 ## RTX 4060 Laptop 后续优化目标（2026-10-21）
 
-参考用户提供的模型比较，增加资源与延迟验收规范，详见 [GPU ASR 选型与性能验收](gpu-asr-evaluation.md)。本次仅更新规划，不改变已验收实现，也不将目标记为已达成。
+参考用户提供的模型比较，增加资源与延迟验收规范，详见 [GPU ASR 选型与性能验收](gpu-asr-evaluation.md)。首次参考材料整理仅更新规划；随后按用户要求完成 Whisper CUDA 与短块管线，实现和目标实测见 [GPU ASR 验收](gpu-asr-validation.md)。
 
 - 以 ASR 与文字翻译合计常驻显存尽量不超过 4 GiB、热态首条中文字幕 1–3 秒、持续处理速度至少 2 倍实时为优化目标。分别记录峰值显存、冷启动、原文与中文延迟，以及游戏 / 视频并行运行的影响。
 - 优先评估 Rust 绑定 whisper.cpp 的 CUDA Whisper large-v3-turbo，与现有 CPU SenseVoice / Zipformer 比较；继续复用 Qwen 本地文字翻译。选定兼容版本、固定权重校验值并完成本机推理前，不增加可用能力声明。

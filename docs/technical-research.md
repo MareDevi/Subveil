@@ -152,3 +152,18 @@ M04 运行验证补充：reqwest 锁定 0.13.5，使用 rustls-no-provider 与�
 下载器使用 std::fs::File::try_lock（本机 Rust 1.99.1）管理同包安装互斥，锁随进程/文件句柄关闭释放。逐文件临时发布与最后提交清单，避免损坏内容标为已安装。完整缓存文件重校验后复用；未实现 HTTP Range 续传。
 
 硬件、模型固定版本、完整条款、实测和未验证项见 [模型选型与运行验收](model-library-validation.md)。当前 GPU 虽可检测，但运行库仍为 CPU，不表示 CUDA 执行已实现。
+
+
+## Whisper CUDA 与短块字幕（2026-10-21）
+
+Context7 先 resolve / query `/tazz4843/whisper-rs`，再核对 crates.io 发布包与实际源码。固定 whisper-rs 0.16.0、whisper-rs-sys 0.15.0，内含 whisper.cpp 1.8.3。采用安全 API `WhisperContextParameters`、`FullParams`、`set_abort_callback_safe`、`WhisperState::as_iter`，应用继续 forbid unsafe。CUDA 13.4 / GCC 15 / SM89 在本机编译通过；CUDA 不参与默认 CPU CI。
+
+上游 GPU 初始化失败可保留 CPU 后端。安全 Rust API 未暴露运行设备查询，因此独立进程安装不输出文本的 `log_backend` 日志接收器，检查固定版本的 CUDA 后端选择、CUDA 权重分配及原生错误标记。缺少标记即失败，升级依赖需复核标记并重测，不能根据 CUDA 编译开关或 NVIDIA 设备枚举宣称推理成功。实际推理还须通过公开 WAV 解码与进程显存观察。
+
+Whisper 与 sherpa、llama 分属独立原生链接单元。PCM 使用最多 1024 字节 JSON 请求头加最多 30 秒单声道 16 kHz 小端 f32 数据；响应限制 64 KiB，文本限制 16 KiB。独立写线程防止大 PCM 被阻塞管道卡住取消；CUDA 10 秒 / CPU 30 秒推理期限、30 秒加载与预热期限由父进程执行，错误毒化引擎并终止进程。模型完整性由 helper 在原生加载前校验。
+
+音频消费线程执行能量 VAD 与最长 2 / 4 / 8 秒分块，解码线程只接收容量 1 的等待队列；过载替换最旧等待块，超过 1 秒仍未开始的等待块丢弃。结果队列容量 2。音频换代 / 中断递增 epoch，旧结果不得变成新会话字幕；Session / Segment / revision 的字幕与翻译保护继续生效。分块是 Final，不伪造 Whisper streaming Partial。前置缓冲按实际保留范围约束，连续分块不复用已提交音频。
+
+Whisper 与 Qwen 均在报告 Ready 前执行固定公开输入预热；预热不含用户内容，也不将结果发送 UI。冷启动与热态延迟分开记录。使用说明、硬件实测与未验证项见 [GPU ASR 验收](gpu-asr-validation.md)。
+
+来源：[whisper-rs 发布 API](https://docs.rs/whisper-rs/0.16.0/whisper_rs/)、[sys 发布源码](https://docs.rs/crate/whisper-rs-sys/0.15.0/source/)、[固定 Whisper 模型](https://huggingface.co/ggerganov/whisper.cpp/tree/5359861c739e955e79d9a303bcbc70fb988958b1)。

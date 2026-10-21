@@ -2,7 +2,7 @@
 
 Rust + GPUI 原生跨平台实时字幕翻译应用，优先支持 Linux / Wayland / PipeWire。
 
-当前阶段 **M05：本地模型与离线字幕**。应用内安装并校验语音识别及文字翻译模型；CPU 识别配合 Qwen 本地翻译，翻译可选择 CPU 或 Vulkan GPU。支持完全离线模式、模型导入、磁盘空间检查、进度与取消、停止卸载和本地设置保存。真实日英离线链路与 RTX 4060 翻译已验证，长时稳定性及完整 GUI 交互仍待验收。云端语音与文字服务继续保留，分别授权上传。入门见 [M05 使用与验收](docs/m05-validation.md)。
+当前阶段 **M05：本地模型与离线字幕**。应用内安装并校验语音识别及文字翻译模型；SenseVoice / Zipformer CPU 识别与 Whisper Turbo CPU / CUDA 短块识别配合 Qwen 本地翻译；翻译可选择 CPU 或 Vulkan GPU。支持完全离线模式、模型导入、磁盘空间检查、进度与取消、停止卸载和本地设置保存。真实日英离线链路、RTX 4060 CUDA 识别与 Vulkan 翻译已验证，长时稳定性及完整 GUI 交互仍待验收。云端语音与文字服务继续保留，分别授权上传。入门见 [M05 使用与验收](docs/m05-validation.md)，新增 CUDA 使用与性能记录见 [GPU ASR 验收](docs/gpu-asr-validation.md)。
 
 ## 开发环境
 
@@ -16,6 +16,8 @@ sudo pacman -S --needed base-devel pkgconf clang cmake fontconfig freetype2 \
   vulkan-icd-loader shaderc pipewire
 ```
 
+可选 Whisper CUDA 后端另需系统 CUDA toolkit 和兼容的主机 C++ 编译器；本机 CUDA 13.4 配合 `gcc15`，不静默安装系统包。`scripts/cuda.sh` 优先使用已安装的 `g++-15`，默认目标为本机 Ada SM89；其他 NVIDIA GPU 构建前设置 `CMAKE_CUDA_ARCHITECTURES`。默认 CPU 构建与 CI 不需要 CUDA。
+
 安装适合 GPU 的 Vulkan 驱动和中文字体，例如 `noto-fonts-cjk`。音频采集需要运行中的 PipeWire 与提供默认输出 metadata 的会话管理器（本机验证为 WirePlumber）。
 
 ```sh
@@ -28,6 +30,9 @@ mise run run
 mise run demo
 # 打开本地模型目录，不自动下载或采集
 mise run models
+# NVIDIA CUDA 专用构建与模型窗口
+mise run doctor:cuda
+mise run models:cuda
 ```
 
 控制窗口分为「实时字幕、语音服务、字幕样式、运行诊断」四个工作区。`Ctrl+1` 至 `Ctrl+4` 切换工作区，`Ctrl+Shift+O` 显示或隐藏浮窗，`Ctrl+S` 保存样式，`Ctrl+Shift+L` 切换明暗外观。恢复入口支持 `Enter` 恢复控制窗口。主题选择仅用于当前进程。
@@ -96,6 +101,9 @@ M01 使用屏幕布局中最左、其次最上方的输出，宽度与高度按�
 | 命令 | 用途 |
 | --- | --- |
 | `mise run build` | 锁定依赖构建 |
+| `mise run build:cuda` | 含 Whisper CUDA 后端的锁定构建 |
+| `mise run check:cuda` | CUDA 构建、严格 Clippy 与测试 |
+| `mise run run:cuda` | 启动支持 Whisper CUDA 的应用 |
 | `mise run run` | 启动控制窗口 |
 | `mise run demo` | 启动离线 mock 双语浮窗 |
 | `mise run models` | 打开本地模型目录 |
@@ -115,7 +123,7 @@ M01 使用屏幕布局中最左、其次最上方的输出，宽度与高度按�
 
 ## 工程与文档
 
-Workspace 包含 `subveil` 应用、`subveil-core` 核心状态与推理协议、`subveil-audio` 音频适配器、`subveil-asr` 识别后端、`subveil-translate` 翻译调度、`subveil-models` 模型目录与下载器、`subveil-inference` 独立 GGUF 推理进程。安装时须将 `subveil` 与 `subveil-inference` 放在同一目录；`mise run build` 构建两者。核心状态和配置不依赖 GPUI，设备与付费 API 均不参与核心测试。GUI 统一依赖 GPUI Kit 0.8.0，通过 facade 使用 gpui-component 0.8.0 与 gpui-pre 0.3.9，保持一致的类型。
+Workspace 包含 `subveil` 应用、`subveil-core` 核心状态与推理协议、`subveil-audio` 音频适配器、`subveil-asr` 识别后端、`subveil-translate` 翻译调度、`subveil-models` 模型目录与下载器、`subveil-inference` 独立 GGUF 推理进程、`subveil-whisper` 独立 ASR 推理进程。安装时须将三个程序放在同一目录；`mise run build` 构建 CPU Whisper，`mise run build:cuda` 构建 CUDA Whisper。普通 `build` / `models` 会替换 helper 为 CPU 构建；使用 CUDA 时运行 `models:cuda` / `run:cuda`。核心状态和配置不依赖 GPUI，设备与付费 API 均不参与核心测试。GUI 统一依赖 GPUI Kit 0.8.0，通过 facade 使用 gpui-component 0.8.0 与 gpui-pre 0.3.9，保持一致的类型。
 
 - [开发规范](AGENTS.md)
 - [完整开发规划](docs/development-plan.md)

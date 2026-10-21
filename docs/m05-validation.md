@@ -2,6 +2,8 @@
 
 日期：2026-10-21，Asia/Shanghai。
 
+> 下文保留原 M05 基线记录。新增 Whisper Turbo CPU / CUDA、短块字幕与资源实测见 [GPU ASR 使用与验收](gpu-asr-validation.md)；原表中 ASR 仍为 CPU 的描述只适用于 sherpa 后端。
+
 ## 开始使用
 
 1. `mise run doctor`，再运行 `mise run models`。首次需构建原生推理库；Arch/CachyOS 需 shaderc 提供 glslc，及适合设备的 Vulkan 驱动。
