@@ -74,6 +74,7 @@ mod tests {
         let mut state = SubtitleState::new(1, 2, 8_000);
         for tick in 0..=44 {
             advance(&mut state, tick, tick * 250);
+            state.advance_presentation(tick * 250);
             state.expire(tick * 250);
             if tick == 12 {
                 assert_eq!(state.history().len(), 1);

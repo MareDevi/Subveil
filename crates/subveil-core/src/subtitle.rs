@@ -64,6 +64,8 @@ pub struct Subtitle {
     /// Whether the display lifetime has ended.
     pub expired: bool,
     expires_at_ms: u64,
+    awaiting_read: bool,
+    read_until_ms: Option<u64>,
 }
 
 /// Subtitle state owned by a session, never by a window.
@@ -111,6 +113,61 @@ impl SubtitleState {
         self.entries.back().filter(|entry| !entry.expired)
     }
 
+    /// Cancel a session while retaining its bounded history and visible text.
+    pub fn stop(&mut self) {
+        self.session_id = self.session_id.saturating_add(1);
+        for entry in &mut self.entries {
+            if matches!(
+                entry.translation,
+                TranslationState::Pending | TranslationState::Streaming(_)
+            ) {
+                entry.translation = TranslationState::Failed("会话已停止，翻译已取消".into());
+            }
+        }
+    }
+
+    /// Return the reading row followed by the latest source, with at most two pairs.
+    pub fn visible(&self) -> Vec<&Subtitle> {
+        let reading = self
+            .entries
+            .iter()
+            .find(|entry| entry.read_until_ms.is_some() && !entry.expired);
+        let latest = self.current();
+        let mut rows = Vec::with_capacity(2);
+        if let Some(entry) = reading {
+            rows.push(entry);
+        }
+        if let Some(entry) = latest
+            && reading.is_none_or(|row| row.transcript.key != entry.transcript.key)
+        {
+            rows.push(entry);
+        }
+        rows
+    }
+
+    /// Schedule completed pairs in source order; each receives at least three seconds.
+    /// The bounded history may still evict rows under sustained overload.
+    pub fn advance_presentation(&mut self, now_ms: u64) -> bool {
+        let mut changed = false;
+        for entry in &mut self.entries {
+            if entry.read_until_ms.is_some_and(|until| now_ms >= until) {
+                entry.read_until_ms = None;
+                entry.awaiting_read = false;
+                changed = true;
+            }
+        }
+        if !self
+            .entries
+            .iter()
+            .any(|entry| entry.read_until_ms.is_some())
+            && let Some(entry) = self.entries.iter_mut().find(|entry| entry.awaiting_read)
+        {
+            entry.read_until_ms = Some(now_ms.saturating_add(3_000));
+            changed = true;
+        }
+        changed
+    }
+
     /// Apply a valid newer transcript or a same-revision partial-to-final promotion.
     /// Returns false for stale sessions, regressions, evicted IDs or invalid text/times.
     pub fn apply(&mut self, event: TranscriptEvent, now_ms: u64) -> bool {
@@ -145,6 +202,8 @@ impl SubtitleState {
                 translation: TranslationState::NotRequested,
                 expired: false,
                 expires_at_ms: now_ms.saturating_add(self.ttl_ms),
+                awaiting_read: false,
+                read_until_ms: None,
             };
             return true;
         }
@@ -161,6 +220,8 @@ impl SubtitleState {
             translation: TranslationState::NotRequested,
             expired: false,
             expires_at_ms: now_ms.saturating_add(self.ttl_ms),
+            awaiting_read: false,
+            read_until_ms: None,
         });
         while self.entries.len() > self.history_limit {
             self.entries.pop_front();
@@ -169,7 +230,7 @@ impl SubtitleState {
     }
 
     /// Apply an integrated speech service's translation to the exact source revision.
-    /// Partial translations may accompany Partial speech; stale and expired work is rejected.
+    /// Partial translations may accompany Partial speech; expired results only update history.
     pub fn apply_provider_translation(
         &mut self,
         key: SegmentKey,
@@ -184,17 +245,21 @@ impl SubtitleState {
         let Some(entry) = self.matching(key) else {
             return false;
         };
-        if now_ms >= entry.expires_at_ms
-            || matches!(entry.translation, TranslationState::Complete(_))
-        {
+        if matches!(entry.translation, TranslationState::Complete(_)) {
             return false;
         }
+        let visible = !entry.expired && now_ms < entry.expires_at_ms;
         entry.translation = if is_final {
             TranslationState::Complete(text)
         } else {
             TranslationState::Streaming(text)
         };
-        entry.expires_at_ms = now_ms.saturating_add(ttl_ms);
+        if visible {
+            entry.expires_at_ms = now_ms.saturating_add(ttl_ms);
+            entry.awaiting_read = is_final;
+        } else {
+            entry.expired = true;
+        }
         true
     }
 
@@ -203,7 +268,7 @@ impl SubtitleState {
         let Some(entry) = self.matching(key) else {
             return false;
         };
-        if !entry.is_final || entry.translation != TranslationState::NotRequested {
+        if entry.expired || !entry.is_final || entry.translation != TranslationState::NotRequested {
             return false;
         }
         entry.translation = TranslationState::Pending;
@@ -221,14 +286,20 @@ impl SubtitleState {
         let Some(entry) = self.matching(key) else {
             return false;
         };
-        if entry.translation != TranslationState::Pending || now_ms >= entry.expires_at_ms {
+        if entry.translation != TranslationState::Pending {
             return false;
         }
+        let visible = !entry.expired && now_ms < entry.expires_at_ms;
         entry.translation = match result {
             Ok(text) => TranslationState::Complete(text),
             Err(error) => TranslationState::Failed(error),
         };
-        entry.expires_at_ms = now_ms.saturating_add(ttl_ms);
+        if visible {
+            entry.expires_at_ms = now_ms.saturating_add(ttl_ms);
+            entry.awaiting_read = matches!(entry.translation, TranslationState::Complete(_));
+        } else {
+            entry.expired = true;
+        }
         true
     }
 
@@ -236,7 +307,7 @@ impl SubtitleState {
     pub fn expire(&mut self, now_ms: u64) -> bool {
         let mut changed = false;
         for entry in &mut self.entries {
-            if !entry.expired && now_ms >= entry.expires_at_ms {
+            if !entry.expired && !entry.awaiting_read && now_ms >= entry.expires_at_ms {
                 entry.expired = true;
                 changed = true;
             }
@@ -250,7 +321,7 @@ impl SubtitleState {
         }
         self.entries
             .iter_mut()
-            .find(|entry| entry.transcript.key == key && !entry.expired)
+            .find(|entry| entry.transcript.key == key)
     }
 }
 
@@ -322,8 +393,12 @@ mod tests {
         let transcript = segment(1, 1, 1, "expire me");
         state.apply(TranscriptEvent::Final(transcript.clone()), 0);
         state.request_translation(transcript.key);
-        assert!(!state.finish_translation(transcript.key, Ok("too late".into()), 1_000));
         assert!(state.expire(1_000));
+        assert!(state.finish_translation(transcript.key, Ok("too late".into()), 1_000));
+        assert_eq!(
+            state.history()[0].translation,
+            TranslationState::Complete("too late".into())
+        );
         assert!(state.current().is_none());
         assert!(!state.apply(
             TranscriptEvent::Final(segment(1, 1, 2, "late revision")),
@@ -358,6 +433,108 @@ mod tests {
             state.current().map(|row| row.transcript.text.as_str()),
             Some("source")
         );
+    }
+
+    #[test]
+    fn late_translation_updates_history_without_returning_to_overlay_even_without_expire_tick() {
+        for expire_first in [false, true] {
+            let mut state = SubtitleState::new(1, 8, 8_000);
+            let first = segment(1, 1, 1, "first");
+            state.apply(TranscriptEvent::Final(first.clone()), 0);
+            state.request_translation(first.key);
+            state.apply(TranscriptEvent::Partial(segment(1, 2, 1, "next")), 8_500);
+            if expire_first {
+                state.expire(9_000);
+            }
+            assert!(state.finish_translation(first.key, Ok("迟到译文".into()), 9_000));
+            state.advance_presentation(9_000);
+            assert_eq!(
+                state.history()[0].translation,
+                TranslationState::Complete("迟到译文".into())
+            );
+            assert_eq!(
+                state
+                    .visible()
+                    .iter()
+                    .map(|row| row.transcript.key.segment_id)
+                    .collect::<Vec<_>>(),
+                vec![2]
+            );
+        }
+    }
+
+    #[test]
+    fn completed_pair_keeps_reading_slot_while_new_sources_arrive() {
+        let mut state = SubtitleState::new(1, 8, 1_000);
+        let first = segment(1, 1, 1, "first");
+        state.apply(TranscriptEvent::Final(first.clone()), 0);
+        state.request_translation(first.key);
+        state.apply(TranscriptEvent::Partial(segment(1, 2, 1, "next")), 100);
+        state.finish_translation(first.key, Ok("第一句".into()), 200);
+        state.advance_presentation(200);
+        state.apply(TranscriptEvent::Partial(segment(1, 3, 1, "third")), 2_000);
+        state.expire(2_000);
+        state.advance_presentation(3_199);
+        assert_eq!(state.visible()[0].transcript.key, first.key);
+        assert_eq!(state.visible().len(), 2);
+        state.advance_presentation(3_200);
+        state.expire(3_200);
+        assert!(state.visible().is_empty());
+    }
+
+    #[test]
+    fn completed_pairs_queue_in_source_order_and_each_gets_three_seconds() {
+        let mut state = SubtitleState::new(1, 8, 1_000);
+        for id in 1..=3 {
+            let row = segment(1, id, 1, "source");
+            state.apply(TranscriptEvent::Final(row.clone()), 0);
+            state.request_translation(row.key);
+        }
+        for id in [2, 1, 3] {
+            assert!(state.finish_translation(
+                segment(1, id, 1, "source").key,
+                Ok("译文".into()),
+                100
+            ));
+        }
+        for (now, id) in [(100, 1), (3_100, 2), (6_100, 3)] {
+            state.advance_presentation(now);
+            state.expire(now);
+            assert_eq!(state.visible()[0].transcript.key.segment_id, id);
+        }
+        state.advance_presentation(9_100);
+        state.expire(9_100);
+        assert!(state.visible().is_empty());
+    }
+
+    #[test]
+    fn stop_retains_history_cancels_pending_work_and_rejects_late_events() {
+        let mut state = SubtitleState::new(1, 8, 8_000);
+        let row = segment(1, 1, 1, "keep this");
+        state.apply(TranscriptEvent::Final(row.clone()), 0);
+        state.request_translation(row.key);
+        state.stop();
+        assert_eq!(state.history().len(), 1);
+        assert!(matches!(
+            state.history()[0].translation,
+            TranslationState::Failed(_)
+        ));
+        assert!(!state.finish_translation(row.key, Ok("late".into()), 100));
+        assert!(!state.apply(TranscriptEvent::Final(segment(1, 2, 1, "late")), 100));
+        assert!(!state.apply_provider_translation(row.key, "late".into(), true, 100));
+        assert!(state.current().is_some());
+        state.reset(3);
+        assert!(state.history().is_empty());
+    }
+
+    #[test]
+    fn evicted_pending_translation_cannot_return_to_history() {
+        let mut state = SubtitleState::new(1, 1, 8_000);
+        let row = segment(1, 1, 1, "old");
+        state.apply(TranscriptEvent::Final(row.clone()), 0);
+        state.request_translation(row.key);
+        state.apply(TranscriptEvent::Final(segment(1, 2, 1, "new")), 1);
+        assert!(!state.finish_translation(row.key, Ok("late".into()), 100));
     }
 
     #[test]
@@ -404,7 +581,8 @@ mod integrated_translation_tests {
     fn expired_or_cancelled_provider_translations_never_revive_subtitles() {
         let mut state = SubtitleState::new(1, 8, 1_000);
         state.apply(TranscriptEvent::Final(segment(1)), 0);
-        assert!(!state.apply_provider_translation(segment(1).key, "过期".into(), true, 1_000));
+        assert!(state.apply_provider_translation(segment(1).key, "过期".into(), true, 1_000));
+        assert!(state.current().is_none());
         state.reset(2);
         assert!(!state.apply_provider_translation(segment(1).key, "取消".into(), true, 1_001));
     }

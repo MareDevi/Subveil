@@ -380,6 +380,7 @@ impl Session {
             self.tick = self.tick.saturating_add(1);
             self.next_tick = now + Duration::from_millis(250);
         }
+        changed |= self.subtitles.advance_presentation(now_ms);
         if changed {
             cx.notify();
         }
@@ -409,14 +410,23 @@ impl Session {
         if let Some(recognition) = &self.recognition {
             recognition.stop();
             self.asr_stopping = true;
-            if let Some(capture) = &self.audio_capture {
-                capture.stop();
-                self.audio_stopping = true;
-            }
+        }
+        if let Some(capture) = &self.audio_capture {
+            capture.stop();
+            self.audio_stopping = true;
+        }
+        self.subtitles.stop();
+        self.message = "字幕会话已停止，记录已保留；未完成的识别与翻译已取消。".into();
+        cx.notify();
+    }
+
+    pub fn clear_history(&mut self, cx: &mut Context<Self>) {
+        if self.running || self.asr_active() || self.asr_stopping {
+            return;
         }
         self.subtitles
             .reset(self.subtitles.session_id().saturating_add(1));
-        self.message = "字幕会话已停止，字幕已清空。".into();
+        self.message = "字幕记录已清空。".into();
         cx.notify();
     }
 

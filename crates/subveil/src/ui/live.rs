@@ -42,7 +42,7 @@ impl ControlView {
                 .child(help("配置语音服务以开始识别，或运行离线演示预览字幕。", cx));
         }
         let mut history = column().gap_0();
-        for entry in session.subtitles.history().iter().rev().take(8) {
+        for entry in session.subtitles.history().iter().rev() {
             history = history.child(
                 div()
                     .id(("segment", entry.transcript.key.segment_id))
@@ -54,7 +54,7 @@ impl ControlView {
                             "片段 {} · {}",
                             entry.transcript.key.segment_id,
                             if entry.expired {
-                                "已过期"
+                                "已离开浮窗"
                             } else if entry.is_final {
                                 "已确定"
                             } else {
@@ -64,30 +64,19 @@ impl ControlView {
                         cx,
                     ))
                     .child(entry.transcript.text.clone())
-                    .when(
-                        matches!(
-                            &entry.translation,
-                            TranslationState::Complete(_) | TranslationState::Streaming(_)
-                        ),
-                        |view| {
-                            if let TranslationState::Complete(text)
-                            | TranslationState::Streaming(text) = &entry.translation
-                            {
-                                view.child(
-                                    div()
-                                        .pt_1()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(text.clone()),
-                                )
-                            } else {
-                                view
-                            }
+                    .child(div().pt_1().text_color(cx.theme().muted_foreground).child(
+                        match &entry.translation {
+                            TranslationState::Complete(text)
+                            | TranslationState::Streaming(text) => text.clone(),
+                            TranslationState::Pending => "正在生成译文…".into(),
+                            TranslationState::Failed(error) => format!("翻译失败：{error}"),
+                            TranslationState::NotRequested => "暂无译文".into(),
                         },
-                    ),
+                    )),
             );
         }
         if session.subtitles.history().is_empty() {
-            history = history.child(help("会话开始后，最近的 8 段原文将显示在这里。", cx));
+            history = history.child(help("会话开始后，保留的原文与译文将显示在这里。", cx));
         }
         column()
             .child(heading(
@@ -123,13 +112,13 @@ impl ControlView {
                         .disabled(session.asr_active() || session.asr_stopping),
                     )
                     .child(
-                        button("stop", "停止并清空", &self.session, Session::stop)
+                        button("stop", "停止字幕", &self.session, Session::stop)
                             .icon(IconName::Square)
                             .ghost()
                             .disabled(
                                 !session.running
                                     && !session.asr_active()
-                                    && session.subtitles.history().is_empty(),
+                                    && !session.audio_active(),
                             ),
                     ),
             )
@@ -150,9 +139,24 @@ impl ControlView {
                             .child("最近字幕"),
                     )
                     .child(help(
-                        format!("最近 {} 段", session.subtitles.history().len().min(8)),
+                        format!("最近 {} 段", session.subtitles.history().len()),
                         cx,
-                    )),
+                    ))
+                    .child(
+                        button(
+                            "clear-history",
+                            "清空记录",
+                            &self.session,
+                            Session::clear_history,
+                        )
+                        .ghost()
+                        .disabled(
+                            session.running
+                                || session.asr_active()
+                                || session.asr_stopping
+                                || session.subtitles.history().is_empty(),
+                        ),
+                    ),
             )
             .child(history)
     }

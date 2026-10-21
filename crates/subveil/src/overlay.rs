@@ -30,27 +30,28 @@ impl Render for OverlayView {
             None
         });
         let mut root = div().size_full().flex().flex_col().justify_end();
-        let Some(subtitle) = session.subtitles.current() else {
-            return root;
-        };
-        let translation = match &subtitle.translation {
-            TranslationState::Complete(text) | TranslationState::Streaming(text) => text.as_str(),
-            TranslationState::Pending => "正在生成译文…",
-            TranslationState::Failed(_) => "翻译失败",
-            TranslationState::NotRequested => {
-                if subtitle.is_final {
-                    ""
-                } else {
-                    "正在识别…"
+        for subtitle in session.subtitles.visible() {
+            let translation = match &subtitle.translation {
+                TranslationState::Complete(text) | TranslationState::Streaming(text) => {
+                    text.as_str()
                 }
-            }
-        };
-        root = root.child(subtitle_panel(
-            settings,
-            &subtitle.transcript.text,
-            translation,
-            cx,
-        ));
+                TranslationState::Pending => "正在生成译文…",
+                TranslationState::Failed(_) => "翻译失败",
+                TranslationState::NotRequested => {
+                    if subtitle.is_final {
+                        ""
+                    } else {
+                        "正在识别…"
+                    }
+                }
+            };
+            root = root.child(subtitle_panel(
+                settings,
+                &subtitle.transcript.text,
+                translation,
+                cx,
+            ));
+        }
         root
     }
 }
@@ -150,7 +151,7 @@ pub fn open(
             DisplayMode::Source => settings.source_ratio,
             DisplayMode::Translation => 1.,
         };
-    let height = (text_height + 48.)
+    let height = ((text_height + 48.) * 2.)
         .min(f32::from(bounds.size.height) - margin - 16.)
         .max(1.);
     cx.open_window(

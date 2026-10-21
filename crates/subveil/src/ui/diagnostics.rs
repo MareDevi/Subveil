@@ -108,6 +108,21 @@ impl ControlView {
                 cx,
             ))
             .child(field(
+                "SenseVoice 丢段",
+                help(
+                    format!(
+                        "累计 {} ms · 最近范围 {}",
+                        session.asr.dropped_segment_ms,
+                        session.asr.last_dropped_segment.map_or_else(
+                            || "无".into(),
+                            |(start, end)| format!("{start}–{end} ms")
+                        )
+                    ),
+                    cx,
+                ),
+                cx,
+            ))
+            .child(field(
                 "会话",
                 help(
                     format!(

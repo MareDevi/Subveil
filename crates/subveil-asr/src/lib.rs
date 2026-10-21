@@ -139,8 +139,12 @@ pub struct Snapshot {
     pub local_inference_ms: u64,
     /// Duration of the latest offline audio segment.
     pub local_audio_ms: u64,
-    /// Whisper blocks discarded on overload, stale input or continuity reset.
+    /// Offline segments discarded on overload, stale input or continuity reset.
     pub dropped_segments: u64,
+    /// Total duration of discarded SenseVoice segments in milliseconds.
+    pub dropped_segment_ms: u64,
+    /// Most recently discarded SenseVoice segment range relative to audio start.
+    pub last_dropped_segment: Option<(u64, u64)>,
 }
 struct Shared {
     stop: AtomicBool,
