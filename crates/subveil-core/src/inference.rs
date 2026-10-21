@@ -1,6 +1,53 @@
 //! Bounded JSON-line protocol for the isolated native inference process.
 use serde::{Deserialize, Serialize};
 
+/// Wire compatibility changes independently of the application's display version.
+pub const PROTOCOL_VERSION: u32 = 2;
+/// Compiled helper identity, queried before weights or native devices are opened.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct BuildInfo {
+    /// Exact IPC protocol revision.
+    pub protocol: u32,
+    /// Workspace release version.
+    pub version: String,
+    /// Package build identifier shared by all bundled binaries.
+    pub build_id: String,
+    /// `translation` or `whisper`.
+    pub helper: String,
+    /// Compiled backends; not proof that a device can run inference.
+    pub backends: Vec<String>,
+}
+impl BuildInfo {
+    /// Identity for the current compile; packaging supplies one common build ID.
+    pub fn current(helper: &str, backends: &[&str]) -> Self {
+        Self {
+            protocol: PROTOCOL_VERSION,
+            version: env!("CARGO_PKG_VERSION").into(),
+            build_id: option_env!("SUBVEIL_BUILD_ID")
+                .unwrap_or("development")
+                .into(),
+            helper: helper.into(),
+            backends: backends.iter().map(|s| (*s).into()).collect(),
+        }
+    }
+    /// Reject mismatched packages and unsupported requested backends before loading.
+    pub fn verify(&self, helper: &str, backend: &str) -> Result<(), &'static str> {
+        let expected = Self::current(helper, &[]);
+        if self.protocol != expected.protocol
+            || self.version != expected.version
+            || self.build_id != expected.build_id
+            || self.helper != helper
+        {
+            return Err("推理程序版本不匹配；请重新安装同一套应用和 helper");
+        }
+        if !self.backends.iter().any(|s| s == backend) {
+            return Err("推理程序未编译所选后端；请安装对应构建，或显式选择 CPU");
+        }
+        Ok(())
+    }
+}
+
 /// Explicit device choice; errors never cause an automatic CPU retry.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub enum Compute {
@@ -64,6 +111,8 @@ pub struct SpeechInput {
 /// Helper result; stdout carries only these protocol messages.
 #[derive(Deserialize, Serialize)]
 pub enum Output {
+    /// First message of every invocation, before native initialization or model I/O.
+    Capabilities(BuildInfo),
     /// Native devices, without loading a model.
     Devices(Vec<Device>),
     /// Successfully loaded model and selected device.
@@ -86,4 +135,21 @@ pub enum Output {
     },
     /// Startup or protocol failure.
     Error(String),
+}
+
+#[cfg(test)]
+mod build_tests {
+    use super::*;
+    #[test]
+    fn incompatible_helpers_and_uncompiled_backends_fail_closed() {
+        let mut build = BuildInfo::current("whisper", &["cpu"]);
+        assert!(build.verify("whisper", "cpu").is_ok());
+        assert!(build.verify("whisper", "cuda").is_err());
+        assert!(build.verify("translation", "cpu").is_err());
+        build.protocol += 1;
+        assert!(build.verify("whisper", "cpu").is_err());
+        build = BuildInfo::current("whisper", &["cpu"]);
+        build.build_id.push_str("-other");
+        assert!(build.verify("whisper", "cpu").is_err());
+    }
 }

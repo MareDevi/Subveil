@@ -85,11 +85,12 @@ run = ["nvcc --version", "nvidia-smi --query-gpu=name,memory.total,driver_versio
 
 [tasks."build:cuda"]
 description = "Build native application and isolated Whisper CUDA backend (requires CUDA toolkit)"
-run = "bash scripts/cuda.sh build --workspace --locked --features subveil-whisper/cuda"
+depends = ["build"]
+run = ["bash scripts/cuda.sh build --target-dir target/cuda --locked -p subveil-whisper --features cuda", "install -m755 target/cuda/debug/subveil-whisper target/debug/subveil-whisper-cuda"]
 
 [tasks."check:cuda"]
 description = "Run all quality gates including the optional CUDA backend"
-run = ["mise run fmt:check", "mise run build:cuda", "bash scripts/cuda.sh clippy --workspace --all-targets --locked --features subveil-whisper/cuda -- -D warnings", "timeout 90s bash scripts/cuda.sh test --workspace --locked --features subveil-whisper/cuda"]
+run = ["mise run fmt:check", "mise run build:cuda", "bash scripts/cuda.sh clippy --target-dir target/cuda -p subveil-whisper --all-targets --locked --features cuda -- -D warnings", "timeout 90s bash scripts/cuda.sh test --target-dir target/cuda -p subveil-whisper --locked --features cuda", "mise run check"]
 
 [tasks."models:cuda"]
 depends = ["build:cuda"]
@@ -112,9 +113,27 @@ run = "cargo run --locked -p subveil"
 
 [tasks."build:whisper:release"]
 description = "Build optimized Whisper CUDA helper and benchmark (CUDA toolkit required)"
-run = ["bash scripts/cuda.sh build --release --locked -p subveil-whisper --features cuda", "cargo build --release --locked -p subveil-asr --example whisper_bench"]
+run = ["bash scripts/cuda.sh build --release --target-dir target/cuda --locked -p subveil-whisper --features cuda", "cargo build --release --locked -p subveil-whisper", "cargo build --release --locked -p subveil-asr --example whisper_bench", "install -m755 target/cuda/release/subveil-whisper target/release/subveil-whisper-cuda"]
 
 [tasks."whisper:bench:release"]
 depends = ["build:whisper:release"]
 description = "Measure optimized Whisper CUDA/CPU inference on an explicit WAV without printing text"
 run = "timeout 90s cargo run --release --locked -p subveil-asr --example whisper_bench --"
+
+[tasks."package:cpu"]
+description = "Build and verify a local Linux installation archive; never publish"
+run = ["cargo build --release --workspace --locked", "python scripts/package.py"]
+
+[tasks."package:cuda"]
+description = "Build a Linux archive containing distinct CPU and CUDA Whisper helpers"
+depends = ["package:cpu"]
+run = ["bash scripts/cuda.sh build --release --target-dir target/cuda --locked -p subveil-whisper --features cuda", "install -m755 target/cuda/release/subveil-whisper target/release/subveil-whisper-cuda", "python scripts/package.py --cuda"]
+
+[tasks."package:debug"]
+description = "Verify packaging and installation layout with existing debug binaries"
+depends = ["build"]
+run = "python scripts/package.py --profile debug"
+
+[tasks."package:smoke"]
+description = "Check a fresh private install prefix and reject missing/mismatched helpers"
+run = "timeout 90s python scripts/package_smoke.py"

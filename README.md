@@ -135,7 +135,7 @@ M01 使用屏幕布局中最左、其次最上方的输出，宽度与高度按�
 
 ## 工程与文档
 
-Workspace 包含 `subveil` 应用、`subveil-core` 核心状态与推理协议、`subveil-audio` 音频适配器、`subveil-asr` 识别后端、`subveil-translate` 翻译调度、`subveil-models` 模型目录与下载器、`subveil-inference` 独立 GGUF 推理进程、`subveil-whisper` 独立 ASR 推理进程。安装时须将三个程序放在同一目录；`mise run build` 构建 CPU Whisper，`mise run build:cuda` 构建 CUDA Whisper。普通 `build` / `models` 会替换 helper 为 CPU 构建；使用 CUDA 时运行 `models:cuda` / `run:cuda`。核心状态和配置不依赖 GPUI，设备与付费 API 均不参与核心测试。GUI 统一依赖 GPUI Kit 0.8.0，通过 facade 使用 gpui-component 0.8.0 与 gpui-pre 0.3.9，保持一致的类型。
+Workspace 包含 `subveil` 应用、`subveil-core` 核心状态与推理协议、`subveil-audio` 音频适配器、`subveil-asr` 识别后端、`subveil-translate` 翻译调度、`subveil-models` 模型目录与下载器、`subveil-inference` 独立 GGUF 推理进程、`subveil-whisper` 独立 ASR 推理进程。安装时须将三个程序放在同一目录；CUDA 另加 `subveil-whisper-cuda`。`mise run build` 构建 CPU Whisper，`mise run build:cuda` 使用独立目录构建 CUDA helper，两者并存，普通构建不会覆盖 CUDA 产物。`subveil --check-installation` 校验 helper 协议、版本、构建标识与编译后端；不代替真实推理验证。本地安装包任务见 [Linux 打包说明](docs/packaging.md)。核心状态和配置不依赖 GPUI，设备与付费 API 均不参与核心测试。GUI 统一依赖 GPUI Kit 0.8.0，通过 facade 使用 gpui-component 0.8.0 与 gpui-pre 0.3.9，保持一致的类型。
 
 - [开发规范](AGENTS.md)
 - [完整开发规划](docs/development-plan.md)

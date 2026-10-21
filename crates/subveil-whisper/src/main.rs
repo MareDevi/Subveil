@@ -78,10 +78,21 @@ fn read_request(reader: &mut impl BufRead) -> anyhow::Result<Option<(SpeechInput
     Ok(Some((request, samples)))
 }
 fn run() -> anyhow::Result<()> {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let backends: &[&str] = if cfg!(feature = "cuda") {
+        &["cpu", "cuda"]
+    } else {
+        &["cpu"]
+    };
+    send(&Output::Capabilities(
+        subveil_core::inference::BuildInfo::current("whisper", backends),
+    ))?;
+    if args.len() == 1 && args[0] == "--capabilities" {
+        return Ok(());
+    }
     log::set_logger(&BACKEND).map_err(|_| anyhow::anyhow!("无法初始化推理诊断"))?;
     log::set_max_level(log::LevelFilter::Info);
     whisper_rs::install_logging_hooks();
-    let args: Vec<_> = std::env::args_os().skip(1).collect();
     ensure!(args.len() == 2, "usage: subveil-whisper MANIFEST cpu|cuda");
     let gpu = match args[1].to_str() {
         Some("cpu") => false,

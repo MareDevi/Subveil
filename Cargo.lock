@@ -7113,6 +7113,7 @@ dependencies = [
  "anyhow",
  "gpui-kit",
  "serde",
+ "serde_json",
  "sherpa-onnx",
  "subveil-asr",
  "subveil-audio",

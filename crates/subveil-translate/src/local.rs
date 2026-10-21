@@ -60,6 +60,14 @@ struct Helper {
     output: Receiver<Result<Output, String>>,
 }
 impl Helper {
+    fn verify_build(&self, backend: &str, stopped: impl Fn() -> bool) -> anyhow::Result<()> {
+        match self.receive(Instant::now() + Duration::from_secs(5), stopped)? {
+            Output::Capabilities(build) => build
+                .verify("translation", backend)
+                .map_err(anyhow::Error::msg),
+            _ => anyhow::bail!("推理程序缺少版本握手；请重新安装同一套程序"),
+        }
+    }
     fn send(&self, value: &impl serde::Serialize) -> anyhow::Result<()> {
         let mut encoded = serde_json::to_vec(value)?;
         ensure!(encoded.len() < 65_536, "推理请求超过协议长度限制");
@@ -196,6 +204,7 @@ impl Drop for Helper {
 /// Probe native GPU devices in a disposable process, without loading weights or using network.
 pub fn devices() -> anyhow::Result<Vec<Device>> {
     let helper = Helper::spawn(&[std::ffi::OsStr::new("--devices")])?;
+    helper.verify_build("cpu", || false)?;
     match helper.receive(Instant::now() + Duration::from_secs(15), || false)? {
         Output::Devices(devices) => Ok(devices),
         _ => anyhow::bail!("GPU 探测协议无效"),
@@ -274,6 +283,14 @@ fn run(
     };
     let helper = Helper::spawn(&[manifest.as_os_str(), std::ffi::OsStr::new(&device)])?;
     let stopped = || shared.stop.load(Ordering::Relaxed);
+    helper.verify_build(
+        if compute == Compute::Cpu {
+            "cpu"
+        } else {
+            "vulkan"
+        },
+        stopped,
+    )?;
     let ready_label = match helper.receive(Instant::now() + Duration::from_secs(30), stopped)? {
         Output::Ready(label) => {
             if let Ok(mut snapshot) = status.lock() {

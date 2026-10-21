@@ -85,4 +85,16 @@ fn stop_preserves_history_clear_rejects_running_and_navigation_restores_focus(
     .expect("navigate from restored focus");
     cx.run_until_parked();
     cx.update(|cx| assert_eq!(view.read(cx).page, 0));
+    cx.simulate_window_resize(handle, size(px(1000.), px(800.)));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("start-live-subtitles").visible());
+        let preview = window.find("live-preview");
+        assert!(preview.visible());
+        assert!(
+            preview.bounds().bottom() <= px(800.),
+            "primary preview should fit first viewport"
+        );
+    })
+    .expect("verify compact production layout");
 }

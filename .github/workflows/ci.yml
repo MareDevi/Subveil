@@ -24,3 +24,5 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: mise run doctor
       - run: mise run check
+      - run: mise run package:debug
+      - run: mise run package:smoke

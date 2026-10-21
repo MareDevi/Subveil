@@ -1,4 +1,5 @@
 /target/
+/scripts/__pycache__/
 /.mise.local.toml
 /mise.local.toml
 *.log

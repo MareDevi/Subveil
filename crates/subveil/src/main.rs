@@ -1,5 +1,6 @@
 mod archive;
 mod credentials;
+mod installation;
 mod mock;
 mod models;
 mod overlay;
@@ -19,6 +20,7 @@ use tracing_subscriber::EnvFilter;
 struct Arguments {
     demo: bool,
     models: bool,
+    check_installation: bool,
     config: Option<PathBuf>,
 }
 
@@ -29,12 +31,13 @@ fn arguments() -> anyhow::Result<Option<Arguments>> {
         match argument.to_str() {
             Some("--demo") => parsed.demo = true,
             Some("--models") => parsed.models = true,
+            Some("--check-installation") => parsed.check_installation = true,
             Some("--config") => {
                 parsed.config = Some(args.next().context("--config requires a file path")?.into())
             }
             Some("--help" | "-h") => {
                 println!(
-                    "Subveil {}\n\nUsage: subveil [--demo] [--models] [--config PATH]\n\n  --demo         Start the offline mock subtitle demonstration\n  --models       Open local model selection without capture or download\n  --config PATH  Read/write subtitle styles at PATH\n  --version      Print application version\n  --help         Print this help",
+                    "Subveil {}\n\nUsage: subveil [--demo] [--models] [--config PATH] [--check-installation]\n\n  --demo         Start the offline mock subtitle demonstration\n  --models       Open local model selection without capture or download\n  --config PATH  Read/write subtitle styles at PATH\n  --check-installation  Verify bundled helper versions without opening GUI\n  --version      Print application version\n  --help         Print this help",
                     env!("CARGO_PKG_VERSION")
                 );
                 return Ok(None);
@@ -56,6 +59,9 @@ fn main() -> anyhow::Result<()> {
     let Some(arguments) = arguments()? else {
         return Ok(());
     };
+    if arguments.check_installation {
+        return installation::check();
+    }
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt()
         .with_env_filter(filter)

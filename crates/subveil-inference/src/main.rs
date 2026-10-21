@@ -92,8 +92,14 @@ fn send(output: &Output) -> anyhow::Result<()> {
 }
 fn run() -> anyhow::Result<()> {
     llama_cpp_2::send_logs_to_tracing(LogOptions::default().with_logs_enabled(false));
-    let backend = LlamaBackend::init().map_err(|_| anyhow::anyhow!("无法初始化本地推理运行库"))?;
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    send(&Output::Capabilities(
+        subveil_core::inference::BuildInfo::current("translation", &["cpu", "vulkan"]),
+    ))?;
+    if args.len() == 1 && args[0] == "--capabilities" {
+        return Ok(());
+    }
+    let backend = LlamaBackend::init().map_err(|_| anyhow::anyhow!("无法初始化本地推理运行库"))?;
     if args.len() == 1 && args[0] == "--devices" {
         return send(&Output::Devices(devices()));
     }

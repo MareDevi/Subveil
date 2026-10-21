@@ -16,7 +16,7 @@ use std::{
 use subveil_audio::FrameReceiver;
 use subveil_core::inference::{Compute, Output, SpeechInput};
 
-fn executable() -> anyhow::Result<PathBuf> {
+fn executable(compute: Compute) -> anyhow::Result<PathBuf> {
     if let Some(path) = std::env::var_os("SUBVEIL_WHISPER_BIN") {
         let path = PathBuf::from(path);
         ensure!(
@@ -35,7 +35,12 @@ fn executable() -> anyhow::Result<PathBuf> {
     } else {
         parent
     };
-    let path = parent.join(format!("subveil-whisper{}", std::env::consts::EXE_SUFFIX));
+    let name = if compute == Compute::Cpu {
+        "subveil-whisper"
+    } else {
+        "subveil-whisper-cuda"
+    };
+    let path = parent.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
     ensure!(
         path.is_file(),
         "找不到 subveil-whisper；请运行 mise run build 或 build:cuda，安装时放在应用同目录"
@@ -145,7 +150,16 @@ impl WhisperEngine {
             Compute::Gpu(0) => "cuda",
             Compute::Gpu(_) => anyhow::bail!("Whisper 当前仅支持 CUDA 设备 0"),
         };
-        let mut engine = Self::spawn(&executable()?, &[manifest.as_os_str(), OsStr::new(device)])?;
+        let mut engine = Self::spawn(
+            &executable(compute)?,
+            &[manifest.as_os_str(), OsStr::new(device)],
+        )?;
+        match engine.receive(Instant::now() + Duration::from_secs(5), &stopped)? {
+            Output::Capabilities(build) => build
+                .verify("whisper", device)
+                .map_err(anyhow::Error::msg)?,
+            _ => anyhow::bail!("Whisper 缺少版本握手；请重新安装同一套程序"),
+        }
         engine.decode_budget_ms = if compute == Compute::Cpu {
             30_000
         } else {

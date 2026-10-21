@@ -1,4 +1,5 @@
 use super::*;
+use gpui_kit::TestSupportExt as _;
 
 impl ControlView {
     pub(super) fn render_live(&self, cx: &mut Context<Self>) -> gpui_kit::Div {
@@ -6,6 +7,9 @@ impl ControlView {
         let issues = session.start_issues();
         let busy = session.configuration_busy();
         let mut preview = column()
+            .id("live-preview")
+            .test_support()
+            .role(gpui_kit::Role::Status)
             .gap_3()
             .min_h_48()
             .p_6()
@@ -124,57 +128,60 @@ impl ControlView {
             history = history.child(help("会话开始后，保留的原文与译文将显示在这里。", cx));
         }
         column()
+            .gap_3()
             .child(heading(
                 "实时字幕",
                 "查看当前原文与服务译文，控制桌面字幕浮窗。",
                 cx,
             ))
-            .child(field(
-                "音源",
-                Select::new(&self.audio_source)
-                    .w_full()
-                    .accessibility_label("采集音源")
-                    .disabled(
-                        session.audio_active()
-                            || session.asr_active()
-                            || session.audio_stopping
-                            || session.asr_stopping,
-                    ),
-                cx,
-            ))
             .child(
-                button(
-                    "refresh-audio-sources",
-                    "刷新音源",
-                    &self.session,
-                    Session::refresh_audio_sources,
-                )
-                .disabled(session.refreshing_sources)
-                .loading(session.refreshing_sources),
+                row()
+                    .child(compact_field(
+                        "音源",
+                        Select::new(&self.audio_source)
+                            .w_full()
+                            .accessibility_label("采集音源")
+                            .disabled(busy || session.audio_active()),
+                    ))
+                    .child(
+                        button(
+                            "refresh-audio-sources",
+                            "刷新音源",
+                            &self.session,
+                            Session::refresh_audio_sources,
+                        )
+                        .disabled(session.refreshing_sources)
+                        .loading(session.refreshing_sources),
+                    ),
             )
             .child(help(session.source_status.clone(), cx))
-            .child(self.render_choice(Choice::Profile, "服务配置", busy, cx))
-            .child(self.render_choice(
-                Choice::SourceLanguage,
-                "源语种",
-                busy || session.asr_config.provider.automatic_language(),
-                cx,
-            ))
-            .child(self.render_choice(Choice::TargetLanguage, "目标语种", busy, cx))
-            .child(field(
-                "识别服务",
-                Select::new(&self.provider)
-                    .w_full()
-                    .accessibility_label("识别服务")
-                    .disabled(busy || session.offline),
-                cx,
-            ))
-            .child(self.render_choice(
-                Choice::Translation,
-                "文字翻译",
-                busy || session.asr_config.provider.translates(),
-                cx,
-            ))
+            .child(
+                row()
+                    .child(self.compact_choice(Choice::Profile, "服务配置", busy, cx))
+                    .child(self.compact_choice(
+                        Choice::SourceLanguage,
+                        "源语种",
+                        busy || session.asr_config.provider.automatic_language(),
+                        cx,
+                    ))
+                    .child(self.compact_choice(Choice::TargetLanguage, "目标语种", busy, cx)),
+            )
+            .child(
+                row()
+                    .child(compact_field(
+                        "识别服务",
+                        Select::new(&self.provider)
+                            .w_full()
+                            .accessibility_label("识别服务")
+                            .disabled(busy || session.offline),
+                    ))
+                    .child(self.compact_choice(
+                        Choice::Translation,
+                        "文字翻译",
+                        busy || session.asr_config.provider.translates(),
+                        cx,
+                    )),
+            )
             .child(help(
                 format!(
                     "当前链路：{} → {} → {}",
@@ -380,5 +387,34 @@ impl ControlView {
                     ),
             )
             .child(history)
+    }
+}
+
+fn compact_field(label: &'static str, control: impl IntoElement) -> gpui_kit::Div {
+    column()
+        .gap_1()
+        .flex_1()
+        .min_w_48()
+        .child(div().text_sm().child(label))
+        .child(control)
+}
+impl ControlView {
+    fn compact_choice(
+        &self,
+        kind: Choice,
+        label: &'static str,
+        disabled: bool,
+        cx: &App,
+    ) -> gpui_kit::Div {
+        match self.choices.iter().find(|choice| choice.kind == kind) {
+            Some(choice) => compact_field(
+                label,
+                Select::new(&choice.state)
+                    .w_full()
+                    .accessibility_label(label)
+                    .disabled(disabled || choice.items.is_empty()),
+            ),
+            None => help("选择器暂不可用", cx),
+        }
     }
 }

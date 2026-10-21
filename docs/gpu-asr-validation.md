@@ -20,7 +20,7 @@ mise run models:cuda
 
 标准 Button 支持 Tab / Shift+Tab、Enter。真实窗口已验证 CUDA→CPU 及 2→4 秒选择变化；临时设置恢复已验证。通过键盘启动真实识别、播放公开日语 WAV，GPUI 实时字幕及浮窗可渲染原文 / 中文，停止测试进程后无残留模型进程。截图仅保留在 `/tmp`，不进入 Git。
 
-安装时将 `subveil`、`subveil-inference`、`subveil-whisper` 放在同一目录。`SUBVEIL_WHISPER_BIN` 可指定绝对路径 helper 进行诊断。`mise run build` / `models` 会构建 CPU Whisper；使用 CUDA 时运行 `build:cuda` / `models:cuda` / `run:cuda`。默认 CI 不依赖 CUDA。CUDA 任务默认编译 Ada SM89，其他 GPU 设置 `CMAKE_CUDA_ARCHITECTURES`；本机脚本使用已有 `g++-15`，不安装或更改系统包。
+安装时将 `subveil`、`subveil-inference`、CPU `subveil-whisper` 以及可选 `subveil-whisper-cuda` 放在同一目录。2026-10-21 整改后 CUDA 产物改为独立文件及构建目录，普通 build 不再覆盖它；以下旧验收数字保留原测试条件。`SUBVEIL_WHISPER_BIN` 可指定绝对路径 helper 进行诊断。`mise run build` / `models` 会构建 CPU Whisper；使用 CUDA 时运行 `build:cuda` / `models:cuda` / `run:cuda`。默认 CI 不依赖 CUDA。CUDA 任务默认编译 Ada SM89，其他 GPU 设置 `CMAKE_CUDA_ARCHITECTURES`；本机脚本使用已有 `g++-15`，不安装或更改系统包。
 
 ## 实测结果
 
