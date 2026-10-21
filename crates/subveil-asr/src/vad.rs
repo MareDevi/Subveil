@@ -69,6 +69,7 @@ pub(crate) struct Vad {
     start: Option<u64>,
     voiced: u64,
     silence: u64,
+    start_floor: u64,
 }
 
 impl Vad {
@@ -78,6 +79,7 @@ impl Vad {
             start: None,
             voiced: 0,
             silence: 0,
+            start_floor: 0,
         }
     }
 
@@ -85,6 +87,15 @@ impl Vad {
         self.start = None;
         self.voiced = 0;
         self.silence = 0;
+        self.start_floor = 0;
+    }
+
+    // A segment buffer cannot supply pre-roll that was already committed or evicted.
+    pub fn retain_from(&mut self, offset: u64) {
+        self.start_floor = offset;
+        if let Some(start) = &mut self.start {
+            *start = (*start).max(offset);
+        }
     }
 
     pub fn accept(&mut self, samples: &[f32], rate: u32, offset: u64) -> Boundary {
@@ -94,8 +105,11 @@ impl Vad {
         let end = offset + samples.len() as u64;
         let to_samples = |ms: u32| u64::from(ms) * u64::from(rate) / 1_000;
         if speech {
-            self.start
-                .get_or_insert(offset.saturating_sub(to_samples(self.config.pre_roll_ms)));
+            self.start.get_or_insert(
+                offset
+                    .saturating_sub(to_samples(self.config.pre_roll_ms))
+                    .max(self.start_floor),
+            );
             self.voiced += samples.len() as u64;
             self.silence = 0;
         } else if self.start.is_some() {

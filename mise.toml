@@ -73,3 +73,44 @@ run = "timeout 90s cargo run --locked -p subveil-translate --example local_probe
 depends = ["build"]
 description = "Local WAV or explicit PipeWire playback through ASR, translation and subtitle state"
 run = "timeout 90s cargo run --locked -p subveil --example offline_pipeline --"
+
+[tasks."doctor:cuda"]
+depends = ["doctor"]
+description = "Check optional NVIDIA CUDA compiler and driver without modifying the system"
+run = ["nvcc --version", "nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv"]
+
+[tasks."build:cuda"]
+description = "Build native application and isolated Whisper CUDA backend (requires CUDA toolkit)"
+run = "bash scripts/cuda.sh build --workspace --locked --features subveil-whisper/cuda"
+
+[tasks."check:cuda"]
+description = "Run all quality gates including the optional CUDA backend"
+run = ["mise run fmt:check", "mise run build:cuda", "bash scripts/cuda.sh clippy --workspace --all-targets --locked --features subveil-whisper/cuda -- -D warnings", "timeout 90s bash scripts/cuda.sh test --workspace --locked --features subveil-whisper/cuda"]
+
+[tasks."models:cuda"]
+depends = ["build:cuda"]
+description = "Open native model library with the CUDA Whisper helper"
+run = "cargo run --locked -p subveil -- --models"
+
+[tasks."whisper:bench"]
+description = "Benchmark the already-built Whisper helper on an explicit public WAV, without printing text"
+run = "timeout 90s cargo run --locked -p subveil-asr --example whisper_bench --"
+
+[tasks."offline:probe:cuda"]
+depends = ["build:cuda"]
+description = "Verify offline subtitles with explicit Whisper CUDA and CPU/Vulkan translation choices"
+run = "timeout 90s cargo run --locked -p subveil --example offline_pipeline --"
+
+[tasks."run:cuda"]
+depends = ["build:cuda"]
+description = "Launch the native application with the optional Whisper CUDA backend"
+run = "cargo run --locked -p subveil"
+
+[tasks."build:whisper:release"]
+description = "Build optimized Whisper CUDA helper and benchmark (CUDA toolkit required)"
+run = ["bash scripts/cuda.sh build --release --locked -p subveil-whisper --features cuda", "cargo build --release --locked -p subveil-asr --example whisper_bench"]
+
+[tasks."whisper:bench:release"]
+depends = ["build:whisper:release"]
+description = "Measure optimized Whisper CUDA/CPU inference on an explicit WAV without printing text"
+run = "timeout 90s cargo run --release --locked -p subveil-asr --example whisper_bench --"

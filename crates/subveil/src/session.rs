@@ -115,6 +115,16 @@ impl Session {
                 }
                 match preferences {
                     Ok(Some(preferences)) => {
+                        session.asr_config.local_compute = if preferences.asr_cuda {
+                            subveil_translate::Compute::Gpu(0)
+                        } else {
+                            subveil_translate::Compute::Cpu
+                        };
+                        if let Some(ms) = preferences.whisper_block_ms
+                            && matches!(ms, 2000 | 4000 | 8000)
+                        {
+                            session.asr_config.whisper_block_ms = ms;
+                        }
                         if let Some(path) = preferences.asr_model {
                             match metadata {
                                 Some(Ok(metadata))
@@ -823,6 +833,27 @@ impl Session {
         };
         cx.notify();
     }
+    pub fn cycle_asr_compute(&mut self, cx: &mut Context<Self>) {
+        if self.asr_active() || self.asr_stopping {
+            return;
+        }
+        self.asr_config.local_compute = match self.asr_config.local_compute {
+            subveil_translate::Compute::Cpu => subveil_translate::Compute::Gpu(0),
+            subveil_translate::Compute::Gpu(_) => subveil_translate::Compute::Cpu,
+        };
+        cx.notify();
+    }
+    pub fn cycle_whisper_block(&mut self, cx: &mut Context<Self>) {
+        if self.asr_active() || self.asr_stopping {
+            return;
+        }
+        self.asr_config.whisper_block_ms = match self.asr_config.whisper_block_ms {
+            2000 => 4000,
+            4000 => 8000,
+            _ => 2000,
+        };
+        cx.notify();
+    }
     pub fn toggle_offline(&mut self, cx: &mut Context<Self>) {
         if self.asr_active()
             || self.local_models.downloading()
@@ -877,6 +908,11 @@ impl Session {
             target: self.asr_config.target_language.clone(),
             offline: self.offline,
             gpu_name,
+            asr_cuda: matches!(
+                self.asr_config.local_compute,
+                subveil_translate::Compute::Gpu(_)
+            ),
+            whisper_block_ms: Some(self.asr_config.whisper_block_ms),
         };
         self.saving_local = true;
         cx.notify();

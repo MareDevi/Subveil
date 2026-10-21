@@ -16,6 +16,8 @@ pub struct LocalPreferences {
     pub target: String,
     pub offline: bool,
     pub gpu_name: Option<String>,
+    pub asr_cuda: bool,
+    pub whisper_block_ms: Option<u32>,
 }
 
 pub fn load_local(path: &Path) -> anyhow::Result<LocalPreferences> {
@@ -132,12 +134,16 @@ mod tests {
             target: "zh".into(),
             offline: true,
             gpu_name: Some("Vulkan · test GPU".into()),
+            asr_cuda: true,
+            whisper_block_ms: Some(2000),
         };
         save_local(&path, &preferences)?;
         let restored = load_local(&path)?;
         assert!(restored.offline);
         assert_eq!(restored.gpu_name, preferences.gpu_name);
         assert_eq!(restored.translation_model, preferences.translation_model);
+        assert!(restored.asr_cuda);
+        assert_eq!(restored.whisper_block_ms, Some(2000));
         fs::remove_dir_all(directory)?;
         Ok(())
     }

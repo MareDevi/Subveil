@@ -74,7 +74,7 @@ impl Provider {
     pub fn name(self) -> &'static str {
         match self {
             Self::Mock => "Mock",
-            Self::Local => "本地 sherpa-onnx",
+            Self::Local => "本地语音识别",
             Self::Deepgram => "Deepgram",
             Self::Alibaba => "阿里云 LiveTranslate",
             Self::Gemini => "Google Gemini",
@@ -114,7 +114,7 @@ impl Provider {
     pub fn destination(self) -> String {
         match self {
             Self::Mock => "本机 Mock（不上传）".into(),
-            Self::Local => "本机 CPU（不上传）".into(),
+            Self::Local => "本机所选识别设备（不上传）".into(),
             Self::Deepgram => "api.deepgram.com".into(),
             Self::Alibaba => "北京百炼业务空间".into(),
             Self::Gemini => "generativelanguage.googleapis.com".into(),

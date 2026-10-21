@@ -43,9 +43,14 @@ fn main() -> anyhow::Result<()> {
         ensure!(Instant::now() < deadline, "model loading timeout");
         thread::sleep(Duration::from_millis(10));
     }
-    for (index, (language, text)) in [
-        ("en", "Good morning. The weather is very nice today."),
-        ("ja", "こんにちは。今日はとても良い天気です。"),
+    for (index, (language, text, meaning)) in [
+        (
+            "en",
+            "Good morning. The weather is very nice today.",
+            "weather",
+        ),
+        ("ja", "こんにちは。今日はとても良い天気です。", "weather"),
+        ("ja", "うちの中学は弁当制で", "fragment"),
     ]
     .into_iter()
     .enumerate()
@@ -70,9 +75,19 @@ fn main() -> anyhow::Result<()> {
         loop {
             if let Some(response) = worker.pop() {
                 let text = response.result.map_err(anyhow::Error::msg)?;
+                let matched = match meaning {
+                    "weather" => text.contains("天气"),
+                    "fragment" => {
+                        !text.contains("免费")
+                            && ["便当", "带饭", "自带", "午餐"]
+                                .iter()
+                                .any(|term| text.contains(term))
+                    }
+                    _ => false,
+                };
                 ensure!(
-                    text.contains("天气"),
-                    "fixture translation missed weather meaning"
+                    matched,
+                    "fixture translation missed meaning or added unsupported content"
                 );
                 println!(
                     "{language}->zh: {} chars, {} ms; fixture meaning matched",

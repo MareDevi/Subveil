@@ -35,6 +35,19 @@ pub struct Input {
     /// Remaining monotonic budget at dispatch.
     pub timeout_ms: u64,
 }
+/// Audio request header, followed by exactly `samples * 4` little-endian PCM bytes.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpeechInput {
+    /// Correlation within one worker lifetime.
+    pub id: u64,
+    /// Explicit source language; no translation task is used.
+    pub language: String,
+    /// Mono 16 kHz float sample count, at most 30 seconds.
+    pub samples: usize,
+    /// Decode budget; parent also enforces a hard process deadline.
+    pub timeout_ms: u64,
+}
 /// Helper result; stdout carries only these protocol messages.
 #[derive(Deserialize, Serialize)]
 pub enum Output {
@@ -48,6 +61,15 @@ pub enum Output {
         id: u64,
         /// Complete text or sanitized error.
         result: Result<String, String>,
+    },
+    /// Complete source transcription from one bounded audio request.
+    Recognition {
+        /// Request correlation identifier.
+        id: u64,
+        /// Source text or sanitized error.
+        result: Result<String, String>,
+        /// Native decoding time, excluding loading and IPC.
+        inference_ms: u64,
     },
     /// Startup or protocol failure.
     Error(String),

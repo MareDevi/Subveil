@@ -13,19 +13,19 @@ use std::{
 };
 use subveil_audio::FrameReceiver;
 
-struct SegmentAudio {
-    start: u64,
-    end: u64,
-    samples: Vec<f32>,
+pub(super) struct SegmentAudio {
+    pub(super) start: u64,
+    pub(super) end: u64,
+    pub(super) samples: Vec<f32>,
 }
-struct Segmenter {
+pub(super) struct Segmenter {
     vad: Vad,
     rate: u32,
     capacity: usize,
     samples: VecDeque<f32>,
 }
 impl Segmenter {
-    fn new(config: &Config) -> Self {
+    pub(super) fn new(config: &Config) -> Self {
         let capacity = (u64::from(config.vad.max_segment_ms + config.vad.pre_roll_ms)
             * u64::from(config.sample_rate)
             / 1000) as usize
@@ -37,16 +37,21 @@ impl Segmenter {
             samples: VecDeque::new(),
         }
     }
-    fn reset(&mut self) {
+    pub(super) fn reset(&mut self) {
         self.vad.reset();
         self.samples.clear();
     }
-    fn accept(&mut self, samples: &[f32], offset: u64) -> Option<SegmentAudio> {
+    pub(super) fn accept(&mut self, samples: &[f32], offset: u64) -> Option<SegmentAudio> {
         self.samples
             .extend(samples.iter().map(|v| if v.is_finite() { *v } else { 0. }));
         while self.samples.len() > self.capacity {
             self.samples.pop_front();
         }
+        self.vad.retain_from(
+            offset
+                .saturating_add(samples.len() as u64)
+                .saturating_sub(self.samples.len() as u64),
+        );
         match self.vad.accept(samples, self.rate, offset) {
             Boundary::Speech {
                 start,
@@ -175,6 +180,29 @@ pub(super) fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn continuous_short_blocks_do_not_repeat_preroll_or_lose_samples() -> anyhow::Result<()> {
+        let mut config = Config {
+            sample_rate: 1000,
+            ..Default::default()
+        };
+        config.vad.max_segment_ms = 2000;
+        let mut segmenter = Segmenter::new(&config);
+        let mut segments = Vec::new();
+        for offset in (0..6000).step_by(20) {
+            if let Some(audio) = segmenter.accept(&[0.1; 20], offset) {
+                segments.push(audio);
+            }
+        }
+        assert_eq!(segments.len(), 3);
+        for (index, audio) in segments.iter().enumerate() {
+            assert_eq!(
+                (audio.start, audio.end, audio.samples.len()),
+                (index as u64 * 2000, (index as u64 + 1) * 2000, 2000)
+            );
+        }
+        Ok(())
+    }
     #[test]
     fn bounded_segmenter_retains_preroll_and_emits_only_finished_speech() {
         let config = Config {

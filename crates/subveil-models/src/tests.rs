@@ -65,7 +65,7 @@ fn server(
 #[test]
 fn curated_catalog_has_pinned_hashes_and_preserves_backend_semantics() -> anyhow::Result<()> {
     let models = catalog()?;
-    assert_eq!(models.len(), 4);
+    assert_eq!(models.len(), 5);
     for model in models {
         let dir = root();
         fs::create_dir_all(&dir)?;
@@ -347,5 +347,33 @@ fn cancellation_interrupts_stalled_http_and_cleans_unverified_bytes() -> anyhow:
             .all(|entry| !entry.file_name().to_string_lossy().ends_with(".part"))
     );
     fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn whisper_weights_require_matching_kind_rate_and_integrity() -> anyhow::Result<()> {
+    let model = catalog()?
+        .into_iter()
+        .find(|m| m.kind == ModelKind::Whisper)
+        .context("whisper")?;
+    let dir = root();
+    fs::create_dir_all(&dir)?;
+    let mut text: toml::Table = toml::from_str(&manifest_text(&model)?)?;
+    let artifact = text
+        .get_mut("model")
+        .and_then(toml::Value::as_table_mut)
+        .context("artifact")?;
+    artifact.insert(
+        "sha256".into(),
+        toml::Value::String(format!("{:x}", Sha256::digest(b"test"))),
+    );
+    fs::write(dir.join("ggml-large-v3-turbo-q5_0.bin"), b"test")?;
+    let path = dir.join("model.toml");
+    fs::write(&path, toml::to_string(&text)?)?;
+    assert!(verified_whisper_model(&path).is_ok());
+    assert!(verified_translation_model(&path).is_err());
+    fs::write(dir.join("ggml-large-v3-turbo-q5_0.bin"), b"evil")?;
+    assert!(verified_whisper_model(&path).is_err());
+    fs::remove_dir_all(dir)?;
     Ok(())
 }

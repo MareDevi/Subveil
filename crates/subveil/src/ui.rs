@@ -520,10 +520,15 @@ impl ControlView {
             view = view
                 .child(help(
                     format!(
-                        "{} · {} · {:.1} MB · CPU",
+                        "{} · {} · {:.1} MB · {}",
                         model.kind.name(),
                         model.languages.join(" / "),
-                        model.size() as f64 / 1_000_000.
+                        model.size() as f64 / 1_000_000.,
+                        if model.kind == subveil_asr::ModelKind::Whisper {
+                            "CPU / CUDA"
+                        } else {
+                            "CPU"
+                        }
                     ),
                     cx,
                 ))
@@ -553,6 +558,20 @@ impl ControlView {
                     ),
                     cx,
                 ));
+        }
+        if models
+            .current()
+            .is_some_and(|m| m.kind == subveil_asr::ModelKind::Whisper)
+            || session.local_kind == subveil_asr::ModelKind::Whisper
+        {
+            let device = match session.asr_config.local_compute {
+                subveil_translate::Compute::Cpu => "CPU",
+                _ => "NVIDIA CUDA0",
+            };
+            view = view
+                .child(field("语音识别设备", button("asr-compute", device, &self.session, Session::cycle_asr_compute).disabled(busy), cx))
+                .child(field("Whisper 分块", button("whisper-block", format!("{} 秒", session.asr_config.whisper_block_ms / 1000), &self.session, Session::cycle_whisper_block).disabled(busy), cx))
+                .child(help("短块更快显示字幕，可能切断词句；长块保留更多上下文。CUDA 需要专用构建，失败不会自动回退。", cx));
         }
         view
             .child(row()
@@ -872,8 +891,11 @@ impl ControlView {
                 "识别统计",
                 help(
                     format!(
-                        "识别重置 {} · 输入丢块 {} · 结果丢事件 {}",
-                        session.asr.resets, session.asr.dropped_audio, session.asr.dropped_events
+                        "识别重置 {} · 输入丢块 {} · 结果丢事件 {} · 丢弃分块 {}",
+                        session.asr.resets,
+                        session.asr.dropped_audio,
+                        session.asr.dropped_events,
+                        session.asr.dropped_segments
                     ),
                     cx,
                 ),

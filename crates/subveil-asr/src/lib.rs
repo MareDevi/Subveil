@@ -3,7 +3,7 @@
 
 mod cloud;
 mod local;
-pub use local::{ModelKind, ModelMetadata, model_metadata};
+pub use local::{ModelKind, ModelMetadata, WhisperEngine, WhisperResult, model_metadata};
 mod mock;
 /// Curated local model catalog and explicit, integrity-checked downloads.
 pub mod models;
@@ -45,6 +45,10 @@ pub struct Config {
     pub provider: Provider,
     /// User-selected streaming model manifest; never downloaded automatically.
     pub local_model: Option<std::path::PathBuf>,
+    /// Explicit Whisper device choice; never applied to the existing CPU sherpa backend.
+    pub local_compute: subveil_core::inference::Compute,
+    /// Whisper block duration in milliseconds; bounds latency at the cost of sentence context.
+    pub whisper_block_ms: u32,
     /// Source language hint: en or ja; automatic providers ignore this hint.
     pub language: String,
     /// Target language for services that return translations.
@@ -61,6 +65,8 @@ impl Default for Config {
         Self {
             provider: Provider::Mock,
             local_model: None,
+            local_compute: subveil_core::inference::Compute::Cpu,
+            whisper_block_ms: 2_000,
             language: "en".into(),
             target_language: "zh".into(),
             sample_rate: 16_000,
@@ -82,6 +88,10 @@ impl Config {
             "ASR rate must be 8000..=48000 Hz"
         );
         self.vad.validate()?;
+        anyhow::ensure!(
+            matches!(self.whisper_block_ms, 2_000 | 4_000 | 8_000),
+            "Whisper 分块必须为 2 / 4 / 8 秒"
+        );
         if self.provider == Provider::Volcano {
             anyhow::ensure!(
                 self.language == "en" || matches!(self.target_language.as_str(), "zh" | "en"),
@@ -129,6 +139,8 @@ pub struct Snapshot {
     pub local_inference_ms: u64,
     /// Duration of the latest offline audio segment.
     pub local_audio_ms: u64,
+    /// Whisper blocks discarded on overload, stale input or continuity reset.
+    pub dropped_segments: u64,
 }
 struct Shared {
     stop: AtomicBool,

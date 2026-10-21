@@ -24,6 +24,8 @@ pub enum ModelKind {
     StreamingTransducer,
     /// SenseVoice called on completed, bounded VAD segments; Final only.
     SenseVoice,
+    /// Whisper over bounded short audio blocks; Final only, not native streaming.
+    Whisper,
     /// GGUF instruction model for local text translation, never an ASR backend.
     QwenTranslation,
 }
@@ -33,6 +35,7 @@ impl ModelKind {
         match self {
             Self::StreamingTransducer => "Streaming · 增量识别",
             Self::SenseVoice => "离线分段 · 句末识别",
+            Self::Whisper => "Whisper · 短块识别",
             Self::QwenTranslation => "本地文字翻译 · GGUF",
         }
     }
@@ -109,7 +112,8 @@ impl Model {
         );
         ensure!(
             (self.repository.starts_with("csukuangfj/")
-                || self.repository == "Qwen/Qwen2.5-1.5B-Instruct-GGUF")
+                || self.repository == "Qwen/Qwen2.5-1.5B-Instruct-GGUF"
+                || self.repository == "ggerganov/whisper.cpp")
                 && self.repository.split('/').count() == 2
                 && self.repository.split('/').all(token),
             "模型来源不在目录支持范围"
@@ -146,7 +150,8 @@ impl Model {
             );
         }
         ensure!(
-            (self.kind == ModelKind::QwenTranslation || names.contains(&"tokens.txt".to_owned()))
+            (matches!(self.kind, ModelKind::QwenTranslation | ModelKind::Whisper)
+                || names.contains(&"tokens.txt".to_owned()))
                 && names.contains(&"README.md".to_owned()),
             "模型包缺少 tokens 或来源说明"
         );
@@ -203,13 +208,20 @@ struct TranslationArtifact {
 
 /// Verify a translation manifest and GGUF before native loading, without network access.
 pub fn verified_translation_model(path: &Path) -> anyhow::Result<PathBuf> {
+    verified_model(path, ModelKind::QwenTranslation, 0)
+}
+
+/// Verify a Whisper manifest and model before isolated native loading.
+pub fn verified_whisper_model(path: &Path) -> anyhow::Result<PathBuf> {
+    verified_model(path, ModelKind::Whisper, 16000)
+}
+
+fn verified_model(path: &Path, kind: ModelKind, rate: u32) -> anyhow::Result<PathBuf> {
     ensure!(fs::metadata(path)?.len() <= 65_536, "模型清单超过 64 KiB");
     let manifest: TranslationManifest = toml::from_str(&fs::read_to_string(path)?)?;
     ensure!(
-        manifest.kind == ModelKind::QwenTranslation
-            && !manifest.source.is_empty()
-            && !manifest.license.is_empty(),
-        "需要声明来源和许可证的翻译模型"
+        manifest.kind == kind && !manifest.source.is_empty() && !manifest.license.is_empty(),
+        "模型类型不匹配，或缺少来源和许可证"
     );
     ensure!(
         manifest.languages.contains(&manifest.language)
@@ -217,8 +229,8 @@ pub fn verified_translation_model(path: &Path) -> anyhow::Result<PathBuf> {
                 .languages
                 .iter()
                 .all(|s| matches!(s.as_str(), "en" | "ja" | "zh"))
-            && manifest.sample_rate == 0,
-        "翻译模型元数据无效"
+            && manifest.sample_rate == rate,
+        "模型元数据无效"
     );
     let model = path
         .parent()
@@ -558,6 +570,7 @@ fn manifest_text(model: &Model) -> anyhow::Result<String> {
             ("tokens", "tokens.txt"),
         ],
         ModelKind::SenseVoice => vec![("model", "model.int8.onnx"), ("tokens", "tokens.txt")],
+        ModelKind::Whisper => vec![("model", "ggml-large-v3-turbo-q5_0.bin")],
         ModelKind::QwenTranslation => vec![("model", "qwen2.5-1.5b-instruct-q4_k_m.gguf")],
     } {
         let file = model

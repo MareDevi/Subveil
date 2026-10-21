@@ -81,6 +81,21 @@ fn run() -> anyhow::Result<()> {
     };
     let model = LlamaModel::load_from_file(&backend, &path, &params)
         .map_err(|_| anyhow::anyhow!("无法加载 GGUF；检查格式、内存和所选设备"))?;
+    // Compile the selected backend's kernels before capture starts. This fixed,
+    // public phrase never includes a user transcript and is never emitted.
+    let warmup = Input {
+        id: 0,
+        text: "Hello.".into(),
+        source: "en".into(),
+        target: "zh".into(),
+        timeout_ms: 20_000,
+    };
+    generate::infer(
+        &model,
+        &backend,
+        &warmup,
+        Instant::now() + Duration::from_secs(20),
+    )?;
     send(&Output::Ready(format!(
         "本地翻译已就绪 · {label} · 不上传文本"
     )))?;

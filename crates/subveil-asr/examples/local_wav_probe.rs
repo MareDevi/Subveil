@@ -11,13 +11,20 @@ use subveil_core::subtitle::TranscriptEvent;
 fn main() -> anyhow::Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     ensure!(
-        (2..=3).contains(&args.len()),
-        "usage: local_wav_probe MODEL_MANIFEST WAV [LANGUAGE]"
+        (2..=4).contains(&args.len()),
+        "usage: local_wav_probe MODEL_MANIFEST WAV [LANGUAGE] [cpu|cuda]"
     );
     let metadata = subveil_asr::model_metadata(std::path::Path::new(&args[0]))?;
     let language = args.get(2).unwrap_or(&metadata.language).clone();
     ensure!(metadata.languages.contains(&language), "模型不支持该语种");
     let kind = metadata.kind;
+    let compute = match args.get(3).map(String::as_str).unwrap_or("cpu") {
+        "cpu" => subveil_core::inference::Compute::Cpu,
+        "cuda" if kind == subveil_asr::ModelKind::Whisper => {
+            subveil_core::inference::Compute::Gpu(0)
+        }
+        _ => anyhow::bail!("cuda requires a Whisper model"),
+    };
     let wave = sherpa_onnx::Wave::read(&args[1]).context("无法读取 WAV")?;
     ensure!(
         wave.sample_rate() == metadata.sample_rate as i32,
@@ -32,6 +39,7 @@ fn main() -> anyhow::Result<()> {
         Config {
             provider: Provider::Local,
             local_model: Some(args[0].clone().into()),
+            local_compute: compute,
             language,
             sample_rate: metadata.sample_rate,
             ..Default::default()

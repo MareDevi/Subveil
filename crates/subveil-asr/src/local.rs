@@ -1,5 +1,6 @@
 //! Integrity-checked streaming transducers and explicitly segmented offline models.
 mod offline;
+mod whisper;
 use crate::{Config, Continuity, Shared, Transcript};
 use anyhow::{Context as _, ensure};
 use serde::Deserialize;
@@ -11,6 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 use subveil_audio::FrameReceiver;
+pub use whisper::{WhisperEngine, WhisperResult};
 
 pub use subveil_models::ModelKind;
 
@@ -82,6 +84,15 @@ impl Manifest {
                     && manifest.decoder.is_none()
                     && manifest.joiner.is_none(),
                 "翻译模型需要 GGUF 文件"
+            ),
+            ModelKind::Whisper => ensure!(
+                manifest.model.is_some()
+                    && manifest.tokens.is_none()
+                    && manifest.encoder.is_none()
+                    && manifest.decoder.is_none()
+                    && manifest.joiner.is_none()
+                    && manifest.sample_rate == 16000,
+                "Whisper 需要 16 kHz GGML 模型文件"
             ),
         }
         ensure!(
@@ -198,6 +209,9 @@ pub(crate) fn run(
         "模型采样率或语种与会话不一致"
     );
     let root = path.parent().context("模型清单缺少目录")?;
+    if manifest.kind == ModelKind::Whisper {
+        return whisper::run(config, session, frames, shared);
+    }
     if manifest.kind == ModelKind::SenseVoice {
         return offline::run(config, session, frames, shared, &manifest, root);
     }
