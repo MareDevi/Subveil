@@ -1,5 +1,13 @@
 # M00 技术调研
 
+## 字幕可靠性修复（2026-10-21）
+
+本次复核用户提供的审查结论：SubtitleState 的显示 TTL 同时限制 finish_translation / matching，确实会丢弃翻译 worker 截止时间内的迟到结果；浮窗只使用 current；stop 调用 reset；SenseVoice 在 PCM 消费循环中 decode。修复设计及边界见 [subtitle-reliability.md](subtitle-reliability.md)。
+
+Context7 先 resolve sherpa-onnx，再查询 `/websites/rs_sherpa-onnx_sherpa_onnx`。查询确认 create_stream / accept_waveform / decode / get_result 调用顺序；线程约束另核对本机锁定版本 sherpa-onnx 1.13.8 `src/offline_asr.rs`，OfflineRecognizer 由上游实现 Send / Sync。本次把唯一 recognizer 移入专用线程，不新增 unsafe。原生 decode 没有取消接口，停止仍可能等待当前 decode 返回；等待只发生于后台 ASR worker。没有因此宣称进程崩溃隔离或可抢占取消。
+
+来源：[OfflineRecognizer](https://docs.rs/sherpa-onnx/1.13.8/sherpa_onnx/struct.OfflineRecognizer.html)。GPUI 继续沿用现有 div、Button、主题与 Layer Shell API；已阅读 Design Guides / Coding Guides，不升级依赖。
+
 ## 全应用界面重构调研（2026-10-21）
 
 本轮先检查 Git（main 干净）、mise Rust 1.99.1 与 doctor。现有工程已使用 `gpui-kit =0.8.0`，无需迁移依赖。Context7 `/longbridge/gpui-kit` 与本机发布源码共同核对 Sidebar、SidebarMenuItem、StatusBar、Progress、Icon API；保留单一 facade 和 Root。
