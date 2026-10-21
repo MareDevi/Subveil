@@ -158,7 +158,7 @@ impl HttpTranslator {
             }
             _ => json!({"model": self.model, "store": false, "stream": false, "messages": [
                 {"role": "system", "content": self.prompt.replace("{source}", source).replace("{target}", &request.target)},
-                {"role": "user", "content": json!({"context": request.context, "text": request.segment.text}).to_string()}
+                {"role": "user", "content": json!({"context": request.context, "glossary": request.glossary, "text": request.segment.text}).to_string()}
             ]}),
         }
     }

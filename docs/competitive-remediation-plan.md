@@ -9,8 +9,8 @@
 | 单元 | 工作 | 状态 |
 | --- | --- | --- |
 | A | helper 写入取消/超时、云错误分类与有界恢复 | 已实现并通过完整门禁；真实云账号未验收 |
-| B | 本地上下文/术语、Final 优先、过时预览取消、事件通知 | 进行中 |
-| C | 神经 VAD、句子边界、Whisper 跨块对齐及阅读预算 | 待实施 |
+| B | 本地上下文/术语、Final 优先、过时预览取消、事件通知 | 已实现并通过完整门禁和真实 CPU helper 短测 |
+| C | 神经 VAD、句子边界、Whisper 跨块对齐及阅读预算 | 进行中 |
 | D | 单应用/播放流选择与断开隔离 | 待实施 |
 | E | 主任务启动流程、能力交集、服务档案、凭据就绪检查 | 待实施 |
 | F | GUI 集成验证、阶段延迟/质量与资源评估 | 待实施 |
@@ -43,3 +43,13 @@ GGUF helper 改为独立写线程、容量 1 请求通道；父 worker 的取消
 - https://github.com/longbridge/gpui-kit
 - https://docs.rs/sherpa-onnx/latest/sherpa_onnx/struct.VoiceActivityDetector.html
 - https://gitlab.freedesktop.org/pipewire/pipewire-rs
+
+## B：翻译调度结果
+
+- Final 独立容量 8 队列、预览 latest-only 容量 1；预览不能挤掉 Final。HTTP 预览在 Final 到来时取消。
+- GGUF stdin 独立读取取消消息；推理按输入 batch/token 检查取消，父进程最多等待两秒取消确认，超时终止并显式报错。取消无需重载模型；不支持抢占单个原生 decode 内部。
+- HTTP 和本地共享按 session/源语种/目标语种隔离的三句源文上下文；排除草稿、当前段与未来段，每句最多 1024 字符。本地超 token 预算先缩参考历史，不截当前字幕。
+- 本地/OpenAI-compatible 可在语音服务填写最多 4096 字节术语表。内容作为数据发送，不拼接进系统指令；可随其他服务设置显式保存到密钥环。
+- 核心容量 1 Signal 驱动 GPUI 异步结果消费；ASR 与翻译结果不再必须等 250 ms 统计定时器。主线程繁忙仍可能延迟，不宣称已测屏幕呈现时间。
+- `mise run check` 通过。新增上下文隔离、Final 优先、原生预览取消、Signal 合并回归。取消消息与初始写入争用容量 1 时曾失败，已以非阻塞重试修复，未扩大队列绕过问题。
+- 已安装 Qwen2.5 1.5B CPU helper 真实短测：取消确认 487 ms；同一个进程随后完成带历史/术语的否定句翻译。只记录成功、否定与耗时，不保存译文。没有上传或采集音频。

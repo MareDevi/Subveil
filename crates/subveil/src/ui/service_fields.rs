@@ -136,7 +136,17 @@ pub fn fields(provider: Provider) -> &'static [Field] {
 }
 pub fn translation_fields(provider: subveil_translate::Provider) -> &'static [Field] {
     match provider {
+        subveil_translate::Provider::Local => &[Field {
+            key: "SUBVEIL_TRANSLATE_GLOSSARY",
+            label: "术语表（原词=译词；分号分隔）",
+            secret: false,
+        }],
         subveil_translate::Provider::OpenAi => &[
+            Field {
+                key: "SUBVEIL_TRANSLATE_GLOSSARY",
+                label: "术语表（原词=译词；分号分隔）",
+                secret: false,
+            },
             Field {
                 key: "SUBVEIL_TRANSLATE_URL",
                 label: "Chat Completions 完整端点",

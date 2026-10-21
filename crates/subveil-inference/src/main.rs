@@ -9,12 +9,63 @@ use llama_cpp_2::{
     model::{LlamaChatMessage, LlamaModel, params::LlamaModelParams},
     sampling::LlamaSampler,
 };
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+    mpsc,
+};
 use std::{
     io::{BufRead, Read, Write},
     num::NonZeroU32,
     time::{Duration, Instant},
 };
 use subveil_core::inference::{Device, Input, Output};
+
+fn requests(cancelled: Arc<AtomicU64>) -> mpsc::Receiver<anyhow::Result<Input>> {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let mut input = std::io::stdin().lock();
+        loop {
+            let mut line = Vec::new();
+            let result = (|| -> anyhow::Result<Option<Input>> {
+                let len = input.by_ref().take(65_537).read_until(b'\n', &mut line)?;
+                if len == 0 {
+                    return Ok(None);
+                }
+                ensure!(
+                    len <= 65_536 && line.last() == Some(&b'\n'),
+                    "推理请求超过长度限制或协议中断"
+                );
+                if let Ok(cancel) =
+                    serde_json::from_slice::<subveil_core::inference::CancelInput>(&line)
+                {
+                    cancelled.fetch_max(cancel.cancel_id, Ordering::Relaxed);
+                    return Ok(None);
+                }
+                Ok(Some(
+                    serde_json::from_slice(&line)
+                        .map_err(|_| anyhow::anyhow!("推理请求协议无效"))?,
+                ))
+            })();
+            if line.is_empty() {
+                break;
+            }
+            match result {
+                Ok(None) => continue,
+                Ok(Some(request)) => {
+                    if sender.try_send(Ok(request)).is_err() {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    let _ = sender.send(Err(error));
+                    break;
+                }
+            }
+        }
+    });
+    receiver
+}
 
 fn devices() -> Vec<Device> {
     llama_cpp_2::list_llama_ggml_backend_devices()
@@ -86,39 +137,34 @@ fn run() -> anyhow::Result<()> {
     let warmup = Input {
         id: 0,
         text: "Hello.".into(),
+        context: String::new(),
+        glossary: String::new(),
         source: "en".into(),
         target: "zh".into(),
         timeout_ms: 20_000,
     };
+    let cancelled = Arc::new(AtomicU64::new(0));
     generate::infer(
         &model,
         &backend,
         &warmup,
         Instant::now() + Duration::from_secs(20),
+        &cancelled,
     )?;
     send(&Output::Ready(format!(
         "本地翻译已就绪 · {label} · 不上传文本"
     )))?;
-    let mut input = std::io::stdin().lock();
-    loop {
-        let mut line = Vec::new();
-        let len = input.by_ref().take(65_537).read_until(b'\n', &mut line)?;
-        if len == 0 {
-            return Ok(());
-        }
-        ensure!(
-            len <= 65_536 && line.last() == Some(&b'\n'),
-            "推理请求超过长度限制或协议中断"
-        );
-        let request: Input = serde_json::from_slice(&line).context("推理请求协议无效")?;
+    for request in requests(cancelled.clone()) {
+        let request = request?;
         let deadline = Instant::now() + Duration::from_millis(request.timeout_ms.min(30_000));
-        let result = generate::infer(&model, &backend, &request, deadline)
+        let result = generate::infer(&model, &backend, &request, deadline, &cancelled)
             .map_err(|error| error.to_string());
         send(&Output::Translation {
             id: request.id,
             result,
         })?;
     }
+    Ok(())
 }
 fn main() {
     if let Err(error) = run() {

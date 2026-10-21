@@ -10,6 +10,7 @@ use subveil_core::subtitle::{SubtitleState, TranslationState};
 
 pub(super) fn shared() -> Shared {
     Shared {
+        wake: subveil_core::signal::Signal::default(),
         stop: AtomicBool::new(false),
         events: ArrayQueue::new(64),
         translations: ArrayQueue::new(64),

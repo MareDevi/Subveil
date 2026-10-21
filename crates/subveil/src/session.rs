@@ -65,9 +65,20 @@ pub struct Session {
     tick: u64,
     next_tick: Instant,
     _timer: Task<()>,
+    _notifications: Vec<Task<()>>,
 }
 
 impl Session {
+    fn watch_signal(&mut self, signal: subveil_core::signal::Signal, cx: &mut Context<Self>) {
+        self._notifications.push(cx.spawn(async move |session, cx| {
+            loop {
+                signal.wait().await;
+                if session.update(cx, |session, cx| session.tick(cx)).is_err() {
+                    break;
+                }
+            }
+        }));
+    }
     pub fn new(
         settings: OverlaySettings,
         config_path: Option<PathBuf>,
@@ -247,6 +258,7 @@ impl Session {
             tick: 0,
             next_tick: Instant::now(),
             _timer: timer,
+            _notifications: Vec::new(),
         }
     }
 
@@ -271,6 +283,7 @@ impl Session {
             })();
             match result {
                 Ok((capture, recognition)) => {
+                    self.watch_signal(recognition.signal(), cx);
                     self.audio_capture = Some(capture);
                     self.recognition = Some(recognition);
                     self.message =
@@ -355,6 +368,12 @@ impl Session {
                                 segment,
                                 self.asr_config.target_language.clone(),
                             );
+                            request.glossary = self
+                                .asr_config
+                                .services
+                                .as_ref()
+                                .and_then(|s| s.optional("SUBVEIL_TRANSLATE_GLOSSARY"))
+                                .unwrap_or_default();
                             if self.translation_provider == subveil_translate::Provider::Local {
                                 request.deadline = Instant::now() + Duration::from_secs(30);
                             }
@@ -405,6 +424,12 @@ impl Session {
             let mut request =
                 subveil_translate::Request::new(segment, self.asr_config.target_language.clone());
             request.provisional = true;
+            request.glossary = self
+                .asr_config
+                .services
+                .as_ref()
+                .and_then(|s| s.optional("SUBVEIL_TRANSLATE_GLOSSARY"))
+                .unwrap_or_default();
             if self.translation_provider == subveil_translate::Provider::Local {
                 request.deadline = Instant::now() + Duration::from_secs(30);
             }
@@ -871,6 +896,13 @@ impl Session {
         })();
         match result {
             Ok((capture, recognition, translation, id, pending)) => {
+                self._notifications.clear();
+                if let Some(worker) = &translation {
+                    self.watch_signal(worker.signal(), cx);
+                }
+                if let Some(worker) = &recognition {
+                    self.watch_signal(worker.signal(), cx);
+                }
                 self.translation = translation;
                 self.translation_dropped = 0;
                 self.running = false;

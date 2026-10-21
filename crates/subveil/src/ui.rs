@@ -199,6 +199,7 @@ impl ControlView {
             .flat_map(service_fields::fields)
             .chain(
                 [
+                    subveil_translate::Provider::Local,
                     subveil_translate::Provider::OpenAi,
                     subveil_translate::Provider::DeepL,
                 ]
@@ -207,6 +208,9 @@ impl ControlView {
             );
         for spec in schemas {
             let key = spec.key;
+            if service_inputs.iter().any(|(existing, _)| *existing == key) {
+                continue;
+            }
             let value = session
                 .read(cx)
                 .asr_config

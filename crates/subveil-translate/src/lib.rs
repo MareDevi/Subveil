@@ -5,6 +5,7 @@ mod http;
 pub use discovery::text_models;
 mod scheduler;
 pub use scheduler::StreamingTranslationScheduler;
+mod context;
 mod local;
 use crossbeam_queue::ArrayQueue;
 use futures_util::future::BoxFuture;
@@ -33,6 +34,8 @@ pub struct Request {
     pub target: String,
     /// Previous source sentences; never future text.
     pub context: String,
+    /// Optional user-owned terminology, bounded to 4096 bytes.
+    pub glossary: String,
     /// Monotonic deadline including queue wait and retries.
     pub deadline: Instant,
 }
@@ -44,6 +47,7 @@ impl Request {
             segment,
             target,
             context: String::new(),
+            glossary: String::new(),
             deadline: Instant::now() + Duration::from_secs(6),
         }
     }
@@ -64,14 +68,23 @@ pub struct Response {
     pub result: Result<String, String>,
 }
 struct Shared {
+    wake: subveil_core::signal::Signal,
     stop: AtomicBool,
     closed: AtomicBool,
     input: ArrayQueue<Request>,
+    preview: ArrayQueue<Request>,
+    context: Mutex<context::SourceContext>,
     output: ArrayQueue<Response>,
     dropped: AtomicU64,
     latest: Mutex<VecDeque<(SegmentKey, bool)>>,
 }
 impl Shared {
+    fn next(&self) -> Option<Request> {
+        self.input.pop().or_else(|| self.preview.pop())
+    }
+    fn preempted(&self, request: &Request) -> bool {
+        self.superseded(request) || (request.provisional && !self.input.is_empty())
+    }
     fn superseded(&self, request: &Request) -> bool {
         self.latest
             .lock()
@@ -84,9 +97,12 @@ impl Shared {
     }
     fn new() -> Self {
         Self {
+            wake: subveil_core::signal::Signal::default(),
             stop: AtomicBool::new(false),
             closed: AtomicBool::new(false),
             input: ArrayQueue::new(8),
+            preview: ArrayQueue::new(1),
+            context: Mutex::new(context::SourceContext::default()),
             output: ArrayQueue::new(64),
             dropped: AtomicU64::new(0),
             latest: Mutex::new(VecDeque::new()),
@@ -99,6 +115,10 @@ pub struct Translation {
     local: Option<Arc<Mutex<LocalSnapshot>>>,
 }
 impl Translation {
+    /// A capacity-one notification for background results and readiness changes.
+    pub fn signal(&self) -> subveil_core::signal::Signal {
+        self.shared.wake.clone()
+    }
     /// Start a backend for one immutable session identity.
     pub fn start(backend: impl Translator, session: u64) -> anyhow::Result<Self> {
         let shared = Arc::new(Shared::new());
@@ -115,7 +135,7 @@ impl Translation {
         })
     }
     /// Submit an accepted revision. Evict oldest waiting request under overload and report its failure.
-    pub fn submit(&self, request: Request) {
+    pub fn submit(&self, mut request: Request) {
         if self.shared.stop.load(Ordering::Relaxed) {
             return;
         }
@@ -140,7 +160,16 @@ impl Translation {
             );
             return;
         }
-        if let Some(old) = self.shared.input.force_push(request) {
+        if let Ok(mut context) = self.shared.context.lock() {
+            request.context = context.before(&request);
+            context.observe(&request);
+        }
+        let queue = if request.provisional {
+            &self.shared.preview
+        } else {
+            &self.shared.input
+        };
+        if let Some(old) = queue.force_push(request) {
             self.shared.dropped.fetch_add(1, Ordering::Relaxed);
             emit(
                 &self.shared,
@@ -178,9 +207,10 @@ fn emit(shared: &Shared, result: Response) {
     if shared.output.force_push(result).is_some() {
         shared.dropped.fetch_add(1, Ordering::Relaxed);
     }
+    shared.wake.notify();
 }
 fn fail_pending(shared: &Shared) {
-    while let Some(request) = shared.input.pop() {
+    while let Some(request) = shared.next() {
         if !shared.stop.load(Ordering::Relaxed) {
             emit(
                 shared,
@@ -194,9 +224,8 @@ fn fail_pending(shared: &Shared) {
     }
 }
 async fn run(backend: impl Translator, session: u64, shared: &Shared) {
-    let mut history = VecDeque::<String>::new();
     while !shared.stop.load(Ordering::Relaxed) {
-        let Some(mut request) = shared.input.pop() else {
+        let Some(request) = shared.next() else {
             tokio::time::sleep(Duration::from_millis(10)).await;
             continue;
         };
@@ -205,13 +234,13 @@ async fn run(backend: impl Translator, session: u64, shared: &Shared) {
         }
         let result = if request.segment.text.is_empty()
             || request.segment.text.len() > 16_384
+            || request.glossary.len() > 4096
             || !matches!(request.target.as_str(), "zh" | "en" | "ja")
         {
             Err("翻译请求文本或目标语种无效".into())
         } else if Instant::now() >= request.deadline {
             Err("翻译请求已过期".into())
         } else {
-            request.context = history.iter().cloned().collect::<Vec<_>>().join("\n");
             let future = backend.translate(&request);
             tokio::pin!(future);
             loop {
@@ -220,7 +249,7 @@ async fn run(backend: impl Translator, session: u64, shared: &Shared) {
                     _ = tokio::time::sleep_until(request.deadline.into()) => break Err("翻译超时".into()),
                     _ = tokio::time::sleep(Duration::from_millis(10)) => {
                         if shared.stop.load(Ordering::Relaxed) { return; }
-                        if shared.superseded(&request) { break Err("翻译修订已被替代".into()); }
+                        if shared.preempted(&request) { break Err("翻译修订已被替代".into()); }
                     }
                 }
             }
@@ -238,13 +267,8 @@ async fn run(backend: impl Translator, session: u64, shared: &Shared) {
                 Ok(text)
             }
         });
-        // Retain at most three short source sentences, never an unlimited transcript.
-        if !request.provisional {
-            history.push_back(request.segment.text.chars().take(1024).collect());
-        }
-        while history.len() > 3 {
-            history.pop_front();
-        }
+        // Source context is captured at admission, before queue coalescing, so
+        // failed translations do not erase preceding authoritative source text.
         emit(
             shared,
             Response {
@@ -303,6 +327,27 @@ mod tests {
         assert_eq!(responses[1].key, request(9, 3).segment.key);
         assert_eq!(responses[1].result.as_deref(), Ok("中文:hello"));
         Ok(())
+    }
+    #[test]
+    fn preview_overload_cannot_evict_waiting_final() {
+        let worker = Translation {
+            shared: Arc::new(Shared::new()),
+            local: None,
+        };
+        worker.submit(request(9, 1));
+        for id in 2..20 {
+            let mut item = request(9, id);
+            item.provisional = true;
+            worker.submit(item);
+        }
+        assert_eq!(worker.shared.input.len(), 1);
+        assert_eq!(worker.shared.preview.len(), 1);
+        assert!(
+            worker
+                .shared
+                .next()
+                .is_some_and(|r| !r.provisional && r.segment.key.segment_id == 1)
+        );
     }
     #[test]
     fn queued_partials_coalesce_and_final_supersedes_same_revision() -> anyhow::Result<()> {

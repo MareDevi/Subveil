@@ -454,6 +454,7 @@ mod tests {
             atomic::{AtomicBool, AtomicU64, Ordering},
         };
         let shared = Arc::new(Shared {
+            wake: subveil_core::signal::Signal::default(),
             stop: AtomicBool::new(false),
             events: ArrayQueue::new(64),
             translations: ArrayQueue::new(64),

@@ -7,3 +7,4 @@ pub mod inference;
 pub mod subtitle;
 
 pub mod services;
+pub mod signal;

@@ -13,8 +13,8 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use subveil_core::inference::{CancelInput, Input, Output};
 pub use subveil_core::inference::{Compute, Device};
-use subveil_core::inference::{Input, Output};
 
 /// Visible loading/readiness/error state, without transcript text.
 #[derive(Clone, Debug)]
@@ -60,6 +60,47 @@ struct Helper {
     output: Receiver<Result<Output, String>>,
 }
 impl Helper {
+    fn send(&self, value: &impl serde::Serialize) -> anyhow::Result<()> {
+        let mut encoded = serde_json::to_vec(value)?;
+        ensure!(encoded.len() < 65_536, "推理请求超过协议长度限制");
+        encoded.push(b'\n');
+        self.input
+            .try_send(encoded)
+            .map_err(|_| anyhow::anyhow!("本地推理写入队列不可用"))
+    }
+    fn translated(&self, id: u64, request: &Request, shared: &Shared) -> anyhow::Result<Output> {
+        let mut cancelled = false;
+        let mut deadline = request.deadline;
+        loop {
+            ensure!(!shared.stop.load(Ordering::Relaxed), "本地推理已取消");
+            ensure!(
+                Instant::now() < deadline,
+                "本地推理或取消确认超时；请重新开始识别"
+            );
+            if !cancelled && shared.preempted(request) {
+                let mut bytes = serde_json::to_vec(&CancelInput { cancel_id: id })?;
+                bytes.push(b'\n');
+                match self.input.try_send(bytes) {
+                    Ok(()) => {
+                        cancelled = true;
+                        deadline = deadline.min(Instant::now() + Duration::from_secs(2));
+                    }
+                    // The writer may not have taken the preceding request yet.
+                    // Keep checking stop/deadline while retrying this control.
+                    Err(mpsc::TrySendError::Full(_)) => {}
+                    Err(mpsc::TrySendError::Disconnected(_)) => {
+                        anyhow::bail!("本地推理写入通道关闭")
+                    }
+                }
+            }
+            match self.output.recv_timeout(Duration::from_millis(10)) {
+                Ok(Ok(Output::Error(error))) | Ok(Err(error)) => anyhow::bail!(error),
+                Ok(Ok(output)) => return Ok(output),
+                Err(RecvTimeoutError::Disconnected) => anyhow::bail!("本地推理进程退出"),
+                Err(RecvTimeoutError::Timeout) => {}
+            }
+        }
+    }
     fn spawn(arguments: &[&std::ffi::OsStr]) -> anyhow::Result<Self> {
         Self::spawn_from(&executable()?, arguments)
     }
@@ -191,6 +232,7 @@ impl Translation {
                 }
                 // Fail pending work explicitly when the model process exits.
                 crate::fail_pending(&state);
+                state.wake.notify();
             })?;
         Ok(Self {
             shared,
@@ -212,6 +254,7 @@ fn validate(request: &Request) -> anyhow::Result<()> {
         !request.segment.text.trim().is_empty() && request.segment.text.len() <= 16_384,
         "翻译文本为空或过长"
     );
+    ensure!(request.glossary.len() <= 4096, "术语表超过 4096 字节");
     ensure!(
         matches!(request.target.as_str(), "en" | "ja" | "zh"),
         "本地翻译仅支持中 / 英 / 日"
@@ -237,6 +280,7 @@ fn run(
                 snapshot.ready = true;
                 snapshot.status = label.clone();
             }
+            shared.wake.notify();
             label
         }
         _ => anyhow::bail!("模型加载协议无效"),
@@ -265,6 +309,8 @@ fn run(
         let input = Input {
             id,
             text: request.segment.text.clone(),
+            context: request.context.clone(),
+            glossary: request.glossary.clone(),
             source: request
                 .segment
                 .language
@@ -278,14 +324,8 @@ fn run(
                 .min(30_000) as u64,
         };
         let result = (|| -> anyhow::Result<_> {
-            let mut encoded = serde_json::to_vec(&input)?;
-            ensure!(encoded.len() < 65_536, "推理请求超过协议长度限制");
-            encoded.push(b'\n');
-            helper
-                .input
-                .try_send(encoded)
-                .map_err(|_| anyhow::anyhow!("本地推理写入队列不可用"))?;
-            match helper.receive(request.deadline, stopped)? {
+            helper.send(&input)?;
+            match helper.translated(id, &request, shared)? {
                 Output::Translation {
                     id: response_id,
                     result,
@@ -302,7 +342,7 @@ fn run(
                         .cloned()
                         .unwrap_or_else(|| ready_label.clone());
                 }
-                if shared.superseded(&request) {
+                if shared.preempted(&request) {
                     continue;
                 }
                 emit(
@@ -412,5 +452,45 @@ mod tests {
         request.deadline = Instant::now() + Duration::from_secs(1);
         request.target = "fr".into();
         assert!(validate(&request).is_err());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn waiting_final_cancels_native_preview_without_reloading_model() -> anyhow::Result<()> {
+        let helper = shell(
+            r#"read first; read cancel; [ "$cancel" = '{"cancel_id":1}' ] || exit 2; printf '%s\n' '{"Translation":{"id":1,"result":{"Err":"cancelled"}}}'"#,
+        )?;
+        let shared = Shared::new();
+        let mut preview = Request::new(
+            TranscriptSegment {
+                key: SegmentKey {
+                    session_id: 1,
+                    segment_id: 1,
+                    revision: 1,
+                },
+                text: "preview".into(),
+                language: Some("en".into()),
+                start_ms: 0,
+                end_ms: 100,
+            },
+            "zh".into(),
+        );
+        preview.provisional = true;
+        let mut final_ = preview.clone();
+        final_.provisional = false;
+        shared
+            .input
+            .push(final_)
+            .map_err(|_| anyhow::anyhow!("queue failed"))?;
+        helper.send(&serde_json::json!({"id":1}))?;
+        let started = Instant::now();
+        assert!(matches!(
+            helper.translated(1, &preview, &shared)?,
+            Output::Translation {
+                id: 1,
+                result: Err(_)
+            }
+        ));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        Ok(())
     }
 }

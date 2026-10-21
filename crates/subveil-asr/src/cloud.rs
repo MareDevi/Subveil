@@ -304,7 +304,7 @@ mod transport_tests {
             .build()?;
         runtime.block_on(async { tokio::time::timeout(Duration::from_secs(2), async {
             let (sender, frames) = FrameReceiver::channel();
-            let shared = Shared {stop: AtomicBool::new(false), events: crossbeam_queue::ArrayQueue::new(64), translations: crossbeam_queue::ArrayQueue::new(64), snapshot: Mutex::new(Default::default()), dropped: AtomicU64::new(0)};
+            let shared = Shared { wake: subveil_core::signal::Signal::default(),stop: AtomicBool::new(false), events: crossbeam_queue::ArrayQueue::new(64), translations: crossbeam_queue::ArrayQueue::new(64), snapshot: Mutex::new(Default::default()), dropped: AtomicU64::new(0)};
             let config = Config::default();
             let mut transcript = Transcript::new(88, "en");
             for sequence in 0..2 {
@@ -356,7 +356,7 @@ mod timeout_tests {
         runtime.block_on(async {
             for continuous_audio in [false, true] {
                 let (sender, frames) = FrameReceiver::channel();
-                let shared = Shared {stop: AtomicBool::new(false), events: crossbeam_queue::ArrayQueue::new(64), translations: crossbeam_queue::ArrayQueue::new(64), snapshot: Mutex::new(Default::default()), dropped: AtomicU64::new(0)};
+                let shared = Shared { wake: subveil_core::signal::Signal::default(),stop: AtomicBool::new(false), events: crossbeam_queue::ArrayQueue::new(64), translations: crossbeam_queue::ArrayQueue::new(64), snapshot: Mutex::new(Default::default()), dropped: AtomicU64::new(0)};
                 let (client_io, server_io) = tokio::io::duplex(16_384);
                 let client = WebSocketStream::from_raw_socket(client_io, Role::Client, None).await;
                 let mut server = WebSocketStream::from_raw_socket(server_io, Role::Server, None).await;

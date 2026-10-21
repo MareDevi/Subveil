@@ -289,6 +289,7 @@ mod tests {
     fn slow_decode_keeps_consuming_pcm_and_reports_whole_segment_drops() -> anyhow::Result<()> {
         use std::sync::{Arc, Mutex, atomic::AtomicU64};
         let shared = Arc::new(Shared {
+            wake: subveil_core::signal::Signal::default(),
             stop: AtomicBool::new(false),
             events: ArrayQueue::new(64),
             translations: ArrayQueue::new(64),

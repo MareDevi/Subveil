@@ -28,12 +28,25 @@ pub struct Input {
     pub id: u64,
     /// Source text.
     pub text: String,
+    /// Previous authoritative source only; at most three 1024-character rows.
+    #[serde(default)]
+    pub context: String,
+    /// User terminology. Treated as data, never as system instructions.
+    #[serde(default)]
+    pub glossary: String,
     /// Source language code.
     pub source: String,
     /// Target language code.
     pub target: String,
     /// Remaining monotonic budget at dispatch.
     pub timeout_ms: u64,
+}
+/// Cancellation is read concurrently with generation; request IDs are monotonic.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CancelInput {
+    /// Cancel the current request with this identifier.
+    pub cancel_id: u64,
 }
 /// Audio request header, followed by exactly `samples * 4` little-endian PCM bytes.
 #[derive(Deserialize, Serialize)]

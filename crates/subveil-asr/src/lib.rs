@@ -190,6 +190,7 @@ pub struct Snapshot {
     pub last_dropped_segment: Option<(u64, u64)>,
 }
 struct Shared {
+    wake: subveil_core::signal::Signal,
     stop: AtomicBool,
     events: ArrayQueue<TranscriptEvent>,
     translations: ArrayQueue<ProviderTranslation>,
@@ -201,11 +202,13 @@ impl Shared {
         if self.events.force_push(event).is_some() {
             self.dropped.fetch_add(1, Ordering::Relaxed);
         }
+        self.wake.notify();
     }
     fn translate(&self, translation: ProviderTranslation) {
         if self.translations.force_push(translation).is_some() {
             self.dropped.fetch_add(1, Ordering::Relaxed);
         }
+        self.wake.notify();
     }
     fn status(&self, status: impl Into<String>, frames: &FrameReceiver, reset: bool) {
         if let Ok(mut snapshot) = self.snapshot.lock() {
@@ -226,10 +229,15 @@ pub struct Recognition {
     worker: Option<JoinHandle<()>>,
 }
 impl Recognition {
+    /// Coalescing notification when transcript or provider translation is available.
+    pub fn signal(&self) -> subveil_core::signal::Signal {
+        self.shared.wake.clone()
+    }
     /// Start recognition with immutable session identity and bounded PCM input.
     pub fn start(config: Config, session_id: u64, frames: FrameReceiver) -> anyhow::Result<Self> {
         config.validate()?;
         let shared = Arc::new(Shared {
+            wake: subveil_core::signal::Signal::default(),
             stop: AtomicBool::new(false),
             events: ArrayQueue::new(64),
             translations: ArrayQueue::new(64),
@@ -495,6 +503,7 @@ mod worker_tests {
     #[test]
     fn result_overload_discards_old_events_and_counts_loss() {
         let shared = Shared {
+            wake: subveil_core::signal::Signal::default(),
             stop: AtomicBool::new(false),
             events: ArrayQueue::new(64),
             translations: ArrayQueue::new(64),
