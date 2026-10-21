@@ -575,6 +575,8 @@ dependencies = [
  "cexpr",
  "clang-sys",
  "itertools 0.13.0",
+ "log",
+ "prettyplease",
  "proc-macro2",
  "quote",
  "regex",
@@ -918,6 +920,15 @@ dependencies = [
  "glob",
  "libc",
  "libloading",
+]
+
+[[package]]
+name = "cmake"
+version = "0.1.58"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0f78a02292a74a88ac736019ab962ece0bc380e3f977bf72e376c5d78ff0678"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
@@ -1760,6 +1771,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
 
 [[package]]
+name = "find_cuda_helper"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9f9e65c593dd01ac77daad909ea4ad17f0d6d1776193fc8ea766356177abdad"
+dependencies = [
+ "glob",
+]
+
+[[package]]
 name = "flate2"
 version = "1.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1912,6 +1932,16 @@ dependencies = [
  "cc",
  "libc",
  "pkg-config",
+]
+
+[[package]]
+name = "fs2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+dependencies = [
+ "libc",
+ "winapi",
 ]
 
 [[package]]
@@ -3679,6 +3709,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4744e383959f0db86ede514b809b1c53251889093803c05267acc7d4e7030d70"
 
 [[package]]
+name = "llama-cpp-2"
+version = "0.1.160"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b98e9f0971b7454a25a550f0bd4577f35b94570be32f8f8dc08d94f4cb2873fe"
+dependencies = [
+ "enumflags2",
+ "llama-cpp-sys-2",
+ "thiserror 2.0.21",
+ "tracing",
+ "tracing-core",
+]
+
+[[package]]
+name = "llama-cpp-sys-2"
+version = "0.1.160"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "912d8a0522acec022ae07d099366234067c8af6a18570a603f0749b7bb927e9a"
+dependencies = [
+ "bindgen",
+ "cc",
+ "cmake",
+ "find_cuda_helper",
+ "glob",
+ "walkdir",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5020,6 +5077,16 @@ name = "presser"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e8cf8e6a8aa66ce33f63993ffc4ea4271eb5b0530a9002db8455ea6050c77bfa"
+
+[[package]]
+name = "prettyplease"
+version = "0.2.37"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
+dependencies = [
+ "proc-macro2",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "proc-macro-crate"
@@ -6469,10 +6536,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "gpui-kit",
+ "serde",
+ "sherpa-onnx",
  "subveil-asr",
  "subveil-audio",
  "subveil-core",
  "subveil-translate",
+ "toml 1.1.8+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
 ]
@@ -6496,6 +6566,7 @@ dependencies = [
  "sherpa-onnx",
  "subveil-audio",
  "subveil-core",
+ "subveil-models",
  "tokio",
  "tokio-tungstenite",
  "toml 1.1.8+spec-1.1.0",
@@ -6523,6 +6594,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "subveil-inference"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "llama-cpp-2",
+ "serde",
+ "serde_json",
+ "subveil-core",
+ "subveil-models",
+]
+
+[[package]]
+name = "subveil-models"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "fs2",
+ "reqwest",
+ "rustls",
+ "serde",
+ "sha2 0.10.9",
+ "tokio",
+ "toml 1.1.8+spec-1.1.0",
+ "uuid",
+]
+
+[[package]]
 name = "subveil-translate"
 version = "0.1.0"
 dependencies = [
@@ -6531,6 +6629,7 @@ dependencies = [
  "futures-util",
  "reqwest",
  "rustls",
+ "serde",
  "serde_json",
  "subveil-core",
  "tokio",

@@ -10,6 +10,8 @@ pub enum Provider {
     /// No text upload or independent translation.
     #[default]
     Disabled,
+    /// Embedded GGUF inference; no server or text upload.
+    Local,
     /// Chat Completions compatible endpoint.
     OpenAi,
     /// DeepL text translation API.
@@ -20,6 +22,7 @@ impl Provider {
     pub fn destination(self) -> String {
         let raw = match self {
             Self::Disabled => return "不上传文本".into(),
+            Self::Local => return "本机 · 不上传文本".into(),
             Self::OpenAi => std::env::var("SUBVEIL_TRANSLATE_URL").unwrap_or_default(),
             Self::DeepL => std::env::var("SUBVEIL_DEEPL_URL")
                 .unwrap_or_else(|_| "https://api-free.deepl.com/v2/translate".into()),
@@ -33,6 +36,7 @@ impl Provider {
     pub fn name(self) -> &'static str {
         match self {
             Self::Disabled => "关闭",
+            Self::Local => "本地离线翻译",
             Self::OpenAi => "OpenAI-compatible",
             Self::DeepL => "DeepL",
         }
@@ -79,6 +83,7 @@ impl HttpTranslator {
         }
         let (url, key, model) = match provider {
             Provider::Disabled => anyhow::bail!("文字翻译已关闭"),
+            Provider::Local => anyhow::bail!("本地模型应使用原生翻译后端"),
             Provider::OpenAi => (
                 env("SUBVEIL_TRANSLATE_URL")?,
                 env("SUBVEIL_TRANSLATE_KEY")?,

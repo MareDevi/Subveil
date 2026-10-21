@@ -11,8 +11,20 @@ pub struct LocalModels {
 }
 impl LocalModels {
     pub fn new() -> Self {
-        let result = subveil_asr::models::catalog()
-            .and_then(|models| Ok((models, subveil_asr::models::data_root()?)));
+        Self::for_translation(false)
+    }
+    pub fn for_translation(translation: bool) -> Self {
+        let result = subveil_asr::models::catalog().and_then(|models| {
+            Ok((
+                models
+                    .into_iter()
+                    .filter(|model| {
+                        (model.kind == subveil_asr::ModelKind::QwenTranslation) == translation
+                    })
+                    .collect(),
+                subveil_asr::models::data_root()?,
+            ))
+        });
         match result {
             Ok((catalog, root)) => Self {
                 catalog,
@@ -51,7 +63,7 @@ impl LocalModels {
         self.snapshot = DownloadSnapshot::default();
         true
     }
-    pub fn install(&mut self) {
+    pub fn install(&mut self, allow_network: bool) {
         if self.downloading() {
             return;
         }
@@ -64,7 +76,7 @@ impl LocalModels {
                 .root
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("没有有效模型存储目录"))?;
-            Download::start(model, root)
+            Download::start_with_network(model, root, allow_network)
         })();
         match result {
             Ok(download) => {

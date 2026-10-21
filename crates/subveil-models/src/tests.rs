@@ -6,7 +6,10 @@ use std::{
 };
 
 fn fixture() -> anyhow::Result<Model> {
-    let mut model = catalog()?.remove(0);
+    let mut model = catalog()?
+        .into_iter()
+        .find(|m| m.kind == ModelKind::SenseVoice)
+        .context("fixture")?;
     for file in &mut model.files {
         file.size = 4;
         file.sha256 = format!("{:x}", Sha256::digest(b"test"));
@@ -62,15 +65,21 @@ fn server(
 #[test]
 fn curated_catalog_has_pinned_hashes_and_preserves_backend_semantics() -> anyhow::Result<()> {
     let models = catalog()?;
-    assert_eq!(models.len(), 3);
+    assert_eq!(models.len(), 4);
     for model in models {
         let dir = root();
         fs::create_dir_all(&dir)?;
         let path = dir.join("model.toml");
         fs::write(&path, manifest_text(&model)?)?;
-        let metadata = crate::model_metadata(&path)?;
-        assert_eq!(metadata.kind, model.kind);
-        assert_eq!(metadata.languages, model.languages);
+        let metadata: toml::Table = toml::from_str(&fs::read_to_string(&path)?)?;
+        assert_eq!(
+            metadata.get("kind"),
+            Some(&toml::Value::try_from(model.kind)?)
+        );
+        assert_eq!(
+            metadata.get("languages"),
+            Some(&toml::Value::try_from(&model.languages)?)
+        );
         fs::remove_dir_all(dir)?;
     }
     Ok(())
@@ -84,12 +93,12 @@ fn valid_download_publishes_manifest_last_and_reuses_cache_without_network() -> 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let path = runtime.block_on(install(&model, &root, &shared, Some(&url)))?;
+    let path = runtime.block_on(install(&model, &root, &shared, Some(&url), true))?;
     server
         .join()
         .map_err(|_| anyhow::anyhow!("server panicked"))??;
     assert!(path.is_file());
-    assert!(crate::model_metadata(&path).is_ok());
+    assert!(toml::from_str::<toml::Table>(&fs::read_to_string(&path)?).is_ok());
     assert_eq!(
         shared
             .snapshot
@@ -100,9 +109,95 @@ fn valid_download_publishes_manifest_last_and_reuses_cache_without_network() -> 
     );
     // A closed port proves verified cached files do not trigger a GET.
     assert_eq!(
-        runtime.block_on(install(&model, &root, &shared, Some("http://127.0.0.1:1")))?,
+        runtime.block_on(install(
+            &model,
+            &root,
+            &shared,
+            Some("http://127.0.0.1:1"),
+            true
+        ))?,
         path
     );
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn offline_install_reuses_verified_files_and_rejects_missing_or_corrupt_files() -> anyhow::Result<()>
+{
+    let model = fixture()?;
+    let root = root();
+    let shared = state(&model);
+    let directory = model
+        .manifest_path(&root)
+        .parent()
+        .context("parent")?
+        .to_path_buf();
+    fs::create_dir_all(&directory)?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    assert!(
+        runtime
+            .block_on(install(
+                &model,
+                &root,
+                &shared,
+                Some("http://127.0.0.1:1"),
+                false
+            ))
+            .is_err()
+    );
+    for file in &model.files {
+        fs::write(directory.join(&file.path), b"test")?;
+    }
+    assert!(
+        runtime
+            .block_on(install(
+                &model,
+                &root,
+                &shared,
+                Some("http://127.0.0.1:1"),
+                false
+            ))
+            .is_ok()
+    );
+    fs::write(directory.join(&model.files[0].path), b"evil")?;
+    assert!(
+        runtime
+            .block_on(install(
+                &model,
+                &root,
+                &shared,
+                Some("http://127.0.0.1:1"),
+                false
+            ))
+            .is_err()
+    );
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn translation_weights_are_verified_and_asr_manifests_are_rejected() -> anyhow::Result<()> {
+    let mut model = catalog()?
+        .into_iter()
+        .find(|m| m.kind == ModelKind::QwenTranslation)
+        .context("translation model")?;
+    let root = root();
+    fs::create_dir_all(&root)?;
+    let path = root.join("model.toml");
+    for file in &mut model.files {
+        file.size = 4;
+        file.sha256 = format!("{:x}", Sha256::digest(b"test"));
+        fs::write(root.join(&file.path), b"test")?;
+    }
+    fs::write(&path, manifest_text(&model)?)?;
+    assert!(verified_translation_model(&path).is_ok());
+    fs::write(root.join(&model.files[0].path), b"evil")?;
+    assert!(verified_translation_model(&path).is_err());
+    fs::write(&path, manifest_text(&fixture()?)?)?;
+    assert!(verified_translation_model(&path).is_err());
     fs::remove_dir_all(root)?;
     Ok(())
 }
@@ -118,7 +213,7 @@ fn corrupted_and_oversized_downloads_never_publish_or_leave_part_files() -> anyh
             .build()?;
         assert!(
             runtime
-                .block_on(install(&model, &root, &shared, Some(&url)))
+                .block_on(install(&model, &root, &shared, Some(&url), true))
                 .is_err()
         );
         server
@@ -158,14 +253,26 @@ fn cancellation_and_parallel_installer_lock_prevent_activation() -> anyhow::Resu
         .build()?;
     assert!(
         runtime
-            .block_on(install(&model, &root, &shared, Some("http://127.0.0.1:1")))
+            .block_on(install(
+                &model,
+                &root,
+                &shared,
+                Some("http://127.0.0.1:1"),
+                true
+            ))
             .is_err()
     );
     drop(lock);
     shared.stop.store(true, Ordering::Relaxed);
     assert!(
         runtime
-            .block_on(install(&model, &root, &shared, Some("http://127.0.0.1:1")))
+            .block_on(install(
+                &model,
+                &root,
+                &shared,
+                Some("http://127.0.0.1:1"),
+                true
+            ))
             .is_err()
     );
     assert!(!model.manifest_path(&root).exists());
@@ -219,7 +326,13 @@ fn cancellation_interrupts_stalled_http_and_cleans_unverified_bytes() -> anyhow:
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let result = runtime.block_on(install_with_cancel(&model, &root, &shared, Some(&url)));
+    let result = runtime.block_on(install_with_cancel(
+        &model,
+        &root,
+        &shared,
+        Some(&url),
+        true,
+    ));
     assert!(result.is_err_and(|error| error.to_string() == "下载已取消"));
     canceller
         .join()

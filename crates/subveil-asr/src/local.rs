@@ -2,7 +2,7 @@
 mod offline;
 use crate::{Config, Continuity, Shared, Transcript};
 use anyhow::{Context as _, ensure};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{
     io::Read,
@@ -12,25 +12,7 @@ use std::{
 };
 use subveil_audio::FrameReceiver;
 
-/// Recognition semantics; offline models never claim incremental streaming output.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ModelKind {
-    /// Stateful online transducer emitting real Partial and Final revisions.
-    #[default]
-    StreamingTransducer,
-    /// SenseVoice called on completed, bounded VAD segments; Final only.
-    SenseVoice,
-}
-impl ModelKind {
-    /// User-facing distinction between real streaming and segmented offline inference.
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::StreamingTransducer => "Streaming · 增量识别",
-            Self::SenseVoice => "离线分段 · 句末识别",
-        }
-    }
-}
+pub use subveil_models::ModelKind;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -46,6 +28,7 @@ struct Manifest {
     language: String,
     #[serde(default)]
     languages: Vec<String>,
+    #[serde(default)]
     sample_rate: u32,
     source: String,
     license: String,
@@ -53,7 +36,7 @@ struct Manifest {
     decoder: Option<Artifact>,
     joiner: Option<Artifact>,
     model: Option<Artifact>,
-    tokens: Artifact,
+    tokens: Option<Artifact>,
 }
 impl Manifest {
     fn read(path: &Path) -> anyhow::Result<Self> {
@@ -77,7 +60,8 @@ impl Manifest {
         );
         match manifest.kind {
             ModelKind::StreamingTransducer => ensure!(
-                manifest.encoder.is_some()
+                manifest.tokens.is_some()
+                    && manifest.encoder.is_some()
                     && manifest.decoder.is_some()
                     && manifest.joiner.is_some()
                     && manifest.model.is_none(),
@@ -85,15 +69,24 @@ impl Manifest {
             ),
             ModelKind::SenseVoice => ensure!(
                 manifest.model.is_some()
+                    && manifest.tokens.is_some()
                     && manifest.encoder.is_none()
                     && manifest.decoder.is_none()
                     && manifest.joiner.is_none()
                     && manifest.sample_rate == 16000,
                 "SenseVoice 需要 16 kHz 模型与 tokens"
             ),
+            ModelKind::QwenTranslation => ensure!(
+                manifest.model.is_some()
+                    && manifest.encoder.is_none()
+                    && manifest.decoder.is_none()
+                    && manifest.joiner.is_none(),
+                "翻译模型需要 GGUF 文件"
+            ),
         }
         ensure!(
-            (8_000..=48_000).contains(&manifest.sample_rate),
+            manifest.kind == ModelKind::QwenTranslation
+                || (8_000..=48_000).contains(&manifest.sample_rate),
             "模型采样率无效"
         );
         ensure!(
@@ -197,6 +190,10 @@ pub(crate) fn run(
     shared.status("校验并加载本地模型…", frames, false);
     let manifest = Manifest::read(path)?;
     ensure!(
+        manifest.kind != ModelKind::QwenTranslation,
+        "文字翻译模型不能用于语音识别"
+    );
+    ensure!(
         manifest.sample_rate == config.sample_rate && manifest.languages.contains(&config.language),
         "模型采样率或语种与会话不一致"
     );
@@ -228,7 +225,11 @@ pub(crate) fn run(
         manifest.joiner.as_ref().context("缺少 joiner")?,
         || shared.stopped(),
     )?);
-    settings.model_config.tokens = Some(verify(root, &manifest.tokens, || shared.stopped())?);
+    settings.model_config.tokens = Some(verify(
+        root,
+        manifest.tokens.as_ref().context("缺少 tokens")?,
+        || shared.stopped(),
+    )?);
     ensure!(!shared.stopped(), "模型加载已取消");
     let recognizer = sherpa_onnx::OnlineRecognizer::create(&settings)
         .context("无法加载 streaming transducer；检查 ONNX 与 tokens 兼容性")?;

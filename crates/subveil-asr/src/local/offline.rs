@@ -98,7 +98,11 @@ pub(super) fn run(
     )?);
     settings.model_config.sense_voice.language = Some(config.language.clone());
     settings.model_config.sense_voice.use_itn = true;
-    settings.model_config.tokens = Some(verify(root, &manifest.tokens, || shared.stopped())?);
+    settings.model_config.tokens = Some(verify(
+        root,
+        manifest.tokens.as_ref().context("缺少 tokens")?,
+        || shared.stopped(),
+    )?);
     ensure!(!shared.stopped(), "模型加载已取消");
     let recognizer = sherpa_onnx::OfflineRecognizer::create(&settings)
         .context("无法加载 SenseVoice ONNX / tokens")?;

@@ -5,6 +5,9 @@ rustc --version
 cargo --version
 rustfmt --version
 cargo clippy --version
+for tool in cmake clang glslc; do
+    command -v "$tool" >/dev/null || { echo "Missing native build tool: $tool" >&2; exit 1; }
+done
 
 if [[ "$(uname -s)" != Linux ]]; then
     echo "Runtime validation currently supports Linux only." >&2

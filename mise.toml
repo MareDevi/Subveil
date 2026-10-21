@@ -10,10 +10,12 @@ description = "Build the native application"
 run = "cargo build --workspace --locked"
 
 [tasks.run]
+depends = ["build"]
 description = "Launch the native subtitle control window"
 run = "cargo run --locked -p subveil"
 
 [tasks.demo]
+depends = ["build"]
 description = "Launch an offline mock subtitle overlay"
 run = "cargo run --locked -p subveil -- --demo"
 
@@ -58,5 +60,16 @@ description = "Explicitly install a curated model using the application's verifi
 run = "timeout 90s cargo run --locked -p subveil-asr --example model_install --"
 
 [tasks.models]
+depends = ["build"]
 description = "Open the native local model library without capture or download"
 run = "cargo run --locked -p subveil -- --models"
+
+[tasks."translate:probe"]
+depends = ["build"]
+description = "Offline native CPU/GPU translation with public English/Japanese fixtures"
+run = "timeout 90s cargo run --locked -p subveil-translate --example local_probe --"
+
+[tasks."offline:probe"]
+depends = ["build"]
+description = "Local WAV or explicit PipeWire playback through ASR, translation and subtitle state"
+run = "timeout 90s cargo run --locked -p subveil --example offline_pipeline --"

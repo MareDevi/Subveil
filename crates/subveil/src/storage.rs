@@ -7,6 +7,53 @@ use std::{
 use anyhow::{Context as _, bail};
 use subveil_core::config::OverlaySettings;
 
+#[derive(Clone, Default, serde::Deserialize, serde::Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LocalPreferences {
+    pub asr_model: Option<PathBuf>,
+    pub translation_model: Option<PathBuf>,
+    pub language: String,
+    pub target: String,
+    pub offline: bool,
+    pub gpu_name: Option<String>,
+}
+
+pub fn load_local(path: &Path) -> anyhow::Result<LocalPreferences> {
+    if !path.exists() {
+        return Ok(LocalPreferences::default());
+    }
+    let mut text = String::new();
+    fs::File::open(path)?
+        .take(65_537)
+        .read_to_string(&mut text)?;
+    if text.len() > 65_536 {
+        bail!("local model configuration exceeds 64 KiB");
+    }
+    Ok(toml::from_str(&text)?)
+}
+
+pub fn save_local(path: &Path, preferences: &LocalPreferences) -> anyhow::Result<()> {
+    let parent = path
+        .parent()
+        .context("local preferences directory missing")?;
+    fs::create_dir_all(parent)?;
+    let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
+    let result = (|| -> anyhow::Result<()> {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(toml::to_string(preferences)?.as_bytes())?;
+        file.sync_all()?;
+        fs::rename(&temporary, path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temporary);
+    }
+    result
+}
+
 pub fn default_path() -> anyhow::Result<PathBuf> {
     resolve_path(
         env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
@@ -71,6 +118,29 @@ pub fn save(path: &Path, settings: &OverlaySettings) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn local_preferences_roundtrip_preserves_offline_and_device_without_credentials()
+    -> anyhow::Result<()> {
+        let directory =
+            env::temp_dir().join(format!("subveil-local-settings-{}", std::process::id()));
+        fs::create_dir_all(&directory)?;
+        let path = directory.join("local-models.toml");
+        let preferences = LocalPreferences {
+            asr_model: Some("/models/asr.toml".into()),
+            translation_model: Some("/models/translation.toml".into()),
+            language: "ja".into(),
+            target: "zh".into(),
+            offline: true,
+            gpu_name: Some("Vulkan · test GPU".into()),
+        };
+        save_local(&path, &preferences)?;
+        let restored = load_local(&path)?;
+        assert!(restored.offline);
+        assert_eq!(restored.gpu_name, preferences.gpu_name);
+        assert_eq!(restored.translation_model, preferences.translation_model);
+        fs::remove_dir_all(directory)?;
+        Ok(())
+    }
 
     #[test]
     fn file_round_trip_and_invalid_file_preservation() -> anyhow::Result<()> {

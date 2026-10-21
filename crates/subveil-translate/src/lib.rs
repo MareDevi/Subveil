@@ -1,13 +1,15 @@
 //! Final-only text translation with bounded queues, deadlines and session cancellation.
 #![deny(missing_docs)]
 mod http;
+mod local;
 use crossbeam_queue::ArrayQueue;
 use futures_util::future::BoxFuture;
 pub use http::{HttpTranslator, Provider};
+pub use local::{Compute, Device, LocalSnapshot, devices};
 use std::{
     collections::VecDeque,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread,
@@ -54,23 +56,31 @@ pub struct Response {
 }
 struct Shared {
     stop: AtomicBool,
+    closed: AtomicBool,
     input: ArrayQueue<Request>,
     output: ArrayQueue<Response>,
     dropped: AtomicU64,
 }
+impl Shared {
+    fn new() -> Self {
+        Self {
+            stop: AtomicBool::new(false),
+            closed: AtomicBool::new(false),
+            input: ArrayQueue::new(8),
+            output: ArrayQueue::new(64),
+            dropped: AtomicU64::new(0),
+        }
+    }
+}
 /// One session's independent translation worker. Drop cancels without blocking GUI.
 pub struct Translation {
     shared: Arc<Shared>,
+    local: Option<Arc<Mutex<LocalSnapshot>>>,
 }
 impl Translation {
     /// Start a backend for one immutable session identity.
     pub fn start(backend: impl Translator, session: u64) -> anyhow::Result<Self> {
-        let shared = Arc::new(Shared {
-            stop: AtomicBool::new(false),
-            input: ArrayQueue::new(8),
-            output: ArrayQueue::new(64),
-            dropped: AtomicU64::new(0),
-        });
+        let shared = Arc::new(Shared::new());
         let state = shared.clone();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -78,11 +88,24 @@ impl Translation {
         thread::Builder::new()
             .name("subveil-translate".into())
             .spawn(move || runtime.block_on(run(backend, session, &state)))?;
-        Ok(Self { shared })
+        Ok(Self {
+            shared,
+            local: None,
+        })
     }
     /// Submit a Final. Evict oldest waiting request under overload and report its failure.
     pub fn submit(&self, request: Request) {
         if self.shared.stop.load(Ordering::Relaxed) {
+            return;
+        }
+        if self.shared.closed.load(Ordering::Acquire) {
+            emit(
+                &self.shared,
+                Response {
+                    key: request.segment.key,
+                    result: Err("本地翻译进程已停止；请重新开始识别".into()),
+                },
+            );
             return;
         }
         if let Some(old) = self.shared.input.force_push(request) {
@@ -94,6 +117,10 @@ impl Translation {
                     result: Err("翻译队列已满；已丢弃旧请求".into()),
                 },
             );
+        }
+        // Close may race the push. Whichever side drains first reports each key once.
+        if self.shared.closed.load(Ordering::Acquire) {
+            fail_pending(&self.shared);
         }
     }
     /// Poll one response without waiting.
@@ -117,6 +144,19 @@ impl Drop for Translation {
 fn emit(shared: &Shared, result: Response) {
     if shared.output.force_push(result).is_some() {
         shared.dropped.fetch_add(1, Ordering::Relaxed);
+    }
+}
+fn fail_pending(shared: &Shared) {
+    while let Some(request) = shared.input.pop() {
+        if !shared.stop.load(Ordering::Relaxed) {
+            emit(
+                shared,
+                Response {
+                    key: request.segment.key,
+                    result: Err("本地翻译进程已停止；请重新开始识别".into()),
+                },
+            );
+        }
     }
 }
 async fn run(backend: impl Translator, session: u64, shared: &Shared) {

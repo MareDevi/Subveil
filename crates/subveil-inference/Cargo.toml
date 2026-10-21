@@ -1,0 +1,17 @@
+[package]
+name = "subveil-inference"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json = "1"
+subveil-core.workspace = true
+subveil-models = { path = "../subveil-models" }
+llama-cpp-2 = { version = "=0.1.160", default-features = false, features = ["vulkan"] }
+
+[lints]
+workspace = true

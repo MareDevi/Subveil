@@ -3,4 +3,5 @@
 #![deny(missing_docs)]
 
 pub mod config;
+pub mod inference;
 pub mod subtitle;

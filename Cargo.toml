@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/subveil", "crates/subveil-core", "crates/subveil-audio", "crates/subveil-asr", "crates/subveil-translate"]
+members = ["crates/subveil", "crates/subveil-core", "crates/subveil-audio", "crates/subveil-asr", "crates/subveil-translate", "crates/subveil-models", "crates/subveil-inference"]
 resolver = "3"
 
 [workspace.package]
@@ -27,3 +27,11 @@ expect_used = "deny"
 
 [profile.dev]
 debug = 1
+
+# Model integrity checks read gigabyte files before inference. Keep hashing fast in
+# development too, so debug builds do not spend the loading deadline in SHA-256.
+[profile.dev.package.sha2]
+opt-level = 3
+
+[profile.dev.package.digest]
+opt-level = 3

@@ -155,7 +155,21 @@ impl ControlView {
                 }
             }
         });
-        let observed = cx.observe(&session, |_, _, cx| cx.notify());
+        let observed = cx.observe_in(&session, window, |this, session, window, cx| {
+            let value = SharedString::from(session.read(cx).asr_config.provider.name());
+            if this.provider.read(cx).selected_value() != Some(&value) {
+                this.provider
+                    .update(cx, |state, cx| state.set_selected_value(&value, window, cx));
+            }
+            if let Some(model) = session.read(cx).local_models.current() {
+                let value = SharedString::from(model.name.clone());
+                if this.local_model.read(cx).selected_value() != Some(&value) {
+                    this.local_model
+                        .update(cx, |state, cx| state.set_selected_value(&value, window, cx));
+                }
+            }
+            cx.notify();
+        });
         let selected_session = session.clone();
         let selected = cx.subscribe(&provider, move |_, _, event, cx| {
             if let SelectEvent::Confirm(Some(name)) = event
@@ -327,11 +341,16 @@ impl ControlView {
         let busy = session.asr_active()
             || session.asr_stopping
             || session.local_models.downloading()
-            || session.importing_model;
+            || session.translation_models.downloading()
+            || session.importing_model
+            || session.restoring_local;
         column()
             .child(heading("语音服务", "选择识别服务与文字翻译；本地识别不上传音频。", cx))
-            .child(field("识别服务", Select::new(&self.provider).disabled(busy)
+            .child(button("offline-mode", if session.offline { "离线模式：开启" } else { "离线模式：关闭" }, &self.session, Session::toggle_offline).disabled(busy))
+            .child(help(if session.offline { "仅使用已安装模型；禁止云端识别、文字上传和模型下载。" } else { "本地模型推理不需要联网；安装时需要网络。" }, cx))
+            .child(field("识别服务", Select::new(&self.provider).disabled(busy || session.offline)
                 .accessibility_label("识别服务").w_full(), cx))
+            .child(help(format!("当前识别：{}", provider.name()), cx))
             .child(field("语言", row()
                 .child(button("asr-language", format!("源语种：{}", if provider.automatic_language() { "自动识别" } else { &session.asr_config.language }), &self.session, Session::cycle_asr_language)
                     .disabled(busy || provider.automatic_language() || (provider == subveil_asr::Provider::Local && session.local_languages.len() <= 1)))
@@ -357,12 +376,130 @@ impl ControlView {
             .child(div().text_sm().child(session.asr.status.clone()))
             .when(provider == subveil_asr::Provider::Local, |view| view.child(self.render_local_models(cx)))
             .child(field("文字翻译", button("translation-provider", format!("翻译服务：{}", session.translation_provider.name()), &self.session, Session::cycle_translation).disabled(busy || provider.translates()), cx))
+            .when(session.translation_provider == subveil_translate::Provider::Local, |view| view.child(self.render_local_translation(cx)))
             .child(help(if provider.translates() { "此语音服务自带译文，不再调用独立文字翻译。" } else { "仅翻译已确定的句子。云端文字翻译可能收费，需独立授权上传原文与最多三句上下文。" }, cx))
             .child(help(format!("文本上传目标：{}", session.translation_provider.destination()), cx))
             .child(button("consent-text", if session.allow_text_upload { "撤销文本上传授权" } else { "同意本次会话上传文本" }, &self.session, Session::consent_text_upload)
-                .disabled(busy || provider.translates() || session.translation_provider == subveil_translate::Provider::Disabled))
+                .disabled(busy || session.offline || provider.translates() || !matches!(session.translation_provider, subveil_translate::Provider::OpenAi | subveil_translate::Provider::DeepL)))
             .child(help(session.translation_status.clone(), cx))
             .child(help(format!("翻译队列丢弃：{}", session.translation_dropped), cx))
+            .child(button("save-local-settings", "保存本地设置", &self.session, Session::save_local_settings).disabled(busy || session.saving_local).loading(session.saving_local))
+    }
+
+    fn render_local_translation(&self, cx: &App) -> gpui_kit::Div {
+        let session = self.session.read(cx);
+        let models = &session.translation_models;
+        let busy = session.asr_active() || session.importing_model || models.downloading();
+        let compute = match session.compute {
+            subveil_translate::Compute::Cpu => "CPU".to_owned(),
+            subveil_translate::Compute::Gpu(index) => session
+                .gpu_devices
+                .iter()
+                .find(|d| d.index == index)
+                .map(|d| d.name.clone())
+                .unwrap_or_else(|| "GPU 不可用".into()),
+        };
+        let mut view = column()
+            .gap_2()
+            .child(
+                button(
+                    "translation-compute",
+                    format!("翻译运行设备：{compute}"),
+                    &self.session,
+                    Session::cycle_compute,
+                )
+                .disabled(busy || session.gpu_devices.is_empty()),
+            )
+            .child(help(session.gpu_status.clone(), cx))
+            .child(help(
+                "语音识别使用 CPU；GPU 加速本地文字翻译。切换设备前请停止识别。",
+                cx,
+            ));
+        if let Some(model) = models.current() {
+            view = view
+                .child(help(
+                    format!(
+                        "{} · {:.1} MB · 中 / 英 / 日",
+                        model.name,
+                        model.size() as f64 / 1_000_000.
+                    ),
+                    cx,
+                ))
+                .child(help(model.summary.clone(), cx))
+                .child(
+                    row()
+                        .child(
+                            Link::new("translation-source")
+                                .href(model.source())
+                                .child("模型来源"),
+                        )
+                        .child(
+                            Link::new("translation-license")
+                                .href(model.license_url.clone())
+                                .child(format!("许可：{}", model.license)),
+                        ),
+                );
+        }
+        view.child(
+            row()
+                .child(
+                    button(
+                        "install-translation",
+                        if session.offline {
+                            "校验并选用本机翻译模型"
+                        } else {
+                            "安装并选用翻译模型"
+                        },
+                        &self.session,
+                        Session::install_translation_model,
+                    )
+                    .disabled(busy),
+                )
+                .child(
+                    button(
+                        "cancel-translation",
+                        "取消翻译模型下载",
+                        &self.session,
+                        Session::cancel_translation_install,
+                    )
+                    .disabled(!models.downloading()),
+                )
+                .child(
+                    button(
+                        "import-translation",
+                        "导入翻译清单…",
+                        &self.session,
+                        Session::import_model,
+                    )
+                    .disabled(busy),
+                ),
+        )
+        .child(help(
+            format!(
+                "{} · {:.1} / {:.1} MB",
+                models.snapshot.status,
+                models.snapshot.completed as f64 / 1_000_000.,
+                models.snapshot.total as f64 / 1_000_000.
+            ),
+            cx,
+        ))
+        .child(help(
+            format!(
+                "翻译模型：{}",
+                session
+                    .translation_model
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "尚未选用".into())
+            ),
+            cx,
+        ))
+        .when_some(models.snapshot.available_bytes, |view, bytes| {
+            view.child(help(
+                format!("模型磁盘可用：{:.2} GiB", bytes as f64 / 1_073_741_824.),
+                cx,
+            ))
+        })
     }
 
     fn render_local_models(&self, cx: &App) -> gpui_kit::Div {
@@ -425,6 +562,7 @@ impl ControlView {
             .child(help("安装会从 Hugging Face 下载模型文件，不上传音频。已下载文件校验后复用；安装不自动开始识别。", cx))
             .child(help(format!("{} · {:.1} / {:.1} MB", models.snapshot.status, models.snapshot.completed as f64 / 1_000_000., models.snapshot.total as f64 / 1_000_000.), cx))
             .child(help(session.model_info.clone(), cx))
+            .when_some(models.snapshot.available_bytes, |view, bytes| view.child(help(format!("模型磁盘可用：{:.2} GiB", bytes as f64 / 1_073_741_824.), cx)))
     }
 
     fn render_appearance(&self, cx: &App) -> gpui_kit::Div {

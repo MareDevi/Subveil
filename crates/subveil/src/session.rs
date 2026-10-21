@@ -24,6 +24,7 @@ pub struct Session {
     pub audio: subveil_audio::Snapshot,
     audio_capture: Option<subveil_audio::Capture>,
     recognition: Option<subveil_asr::Recognition>,
+    pending_asr: Option<subveil_asr::Config>,
     pub asr_config: subveil_asr::Config,
     pub asr: subveil_asr::Snapshot,
     pub asr_stopping: bool,
@@ -34,6 +35,14 @@ pub struct Session {
     pub translation_dropped: u64,
     pub model_info: String,
     pub local_models: crate::models::LocalModels,
+    pub translation_models: crate::models::LocalModels,
+    pub translation_model: Option<PathBuf>,
+    pub compute: subveil_translate::Compute,
+    pub gpu_devices: Vec<subveil_translate::Device>,
+    pub gpu_status: String,
+    pub offline: bool,
+    pub restoring_local: bool,
+    pub saving_local: bool,
     pub local_languages: Vec<String>,
     pub local_kind: subveil_asr::ModelKind,
     local_language: Option<String>,
@@ -66,6 +75,99 @@ impl Session {
                 }
             }
         });
+        let preferences_path = config_path
+            .as_ref()
+            .map(|path| path.with_file_name("local-models.toml"));
+        cx.spawn(async move |session, cx| {
+            let (result, preferences, metadata) = cx
+                .background_executor()
+                .spawn(async move {
+                    let preferences = preferences_path
+                        .map(|path| storage::load_local(&path))
+                        .transpose();
+                    let metadata = preferences
+                        .as_ref()
+                        .ok()
+                        .and_then(|p| p.as_ref())
+                        .and_then(|p| p.asr_model.as_ref())
+                        .map(|path| subveil_asr::model_metadata(path));
+                    (subveil_translate::devices(), preferences, metadata)
+                })
+                .await;
+            let _ = session.update(cx, |session, cx| {
+                match result {
+                    Ok(devices) => {
+                        session.gpu_status = if devices.is_empty() {
+                            "未发现可用 Vulkan GPU；可选择 CPU 翻译".into()
+                        } else {
+                            format!(
+                                "可用 GPU：{}",
+                                devices
+                                    .iter()
+                                    .map(|d| d.name.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(" / ")
+                            )
+                        };
+                        session.gpu_devices = devices;
+                    }
+                    Err(error) => session.gpu_status = format!("GPU 检测失败：{error}"),
+                }
+                match preferences {
+                    Ok(Some(preferences)) => {
+                        if let Some(path) = preferences.asr_model {
+                            match metadata {
+                                Some(Ok(metadata))
+                                    if metadata.kind != subveil_asr::ModelKind::QwenTranslation =>
+                                {
+                                    session.apply_local_model(path, metadata)
+                                }
+                                _ => {
+                                    session.model_info =
+                                        "上次选择的识别模型不可用；请重新安装或导入".into()
+                                }
+                            }
+                            session.asr_config.provider = subveil_asr::Provider::Local;
+                        }
+                        session.translation_model = preferences.translation_model;
+                        if session.translation_model.is_some() || preferences.offline {
+                            session.translation_provider = subveil_translate::Provider::Local;
+                        }
+                        if session.local_languages.contains(&preferences.language) {
+                            session
+                                .asr_config
+                                .language
+                                .clone_from(&preferences.language);
+                            session.local_language = Some(preferences.language);
+                        }
+                        if matches!(preferences.target.as_str(), "en" | "ja" | "zh") {
+                            session.asr_config.target_language = preferences.target;
+                        }
+                        session.offline = preferences.offline;
+                        if session.offline {
+                            session.asr_config.provider = subveil_asr::Provider::Local;
+                        }
+                        if let Some(name) = preferences.gpu_name {
+                            session.compute = subveil_translate::Compute::Gpu(
+                                session
+                                    .gpu_devices
+                                    .iter()
+                                    .find(|device| device.name == name)
+                                    .map(|device| device.index)
+                                    .unwrap_or(usize::MAX),
+                            );
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        session.message = format!("本地设置恢复失败，原文件未修改：{error}")
+                    }
+                }
+                session.restoring_local = false;
+                cx.notify();
+            });
+        })
+        .detach();
         Self {
             subtitles: SubtitleState::new(1, settings.history_limit, settings.ttl_ms),
             settings,
@@ -77,6 +179,7 @@ impl Session {
             audio: subveil_audio::Snapshot::default(),
             audio_capture: None,
             recognition: None,
+            pending_asr: None,
             asr_config: subveil_asr::Config::default(),
             asr: subveil_asr::Snapshot {
                 status: "尚未启动识别".into(),
@@ -90,6 +193,14 @@ impl Session {
             translation_dropped: 0,
             model_info: "尚未选择本地模型".into(),
             local_models: crate::models::LocalModels::new(),
+            translation_models: crate::models::LocalModels::for_translation(true),
+            translation_model: None,
+            compute: subveil_translate::Compute::Cpu,
+            gpu_devices: Vec::new(),
+            gpu_status: "正在检测 Vulkan GPU…".into(),
+            offline: false,
+            restoring_local: true,
+            saving_local: false,
             local_languages: Vec::new(),
             local_kind: subveil_asr::ModelKind::default(),
             local_language: None,
@@ -110,6 +221,42 @@ impl Session {
         let now = Instant::now();
         let now_ms = self.started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
         let mut changed = self.subtitles.expire(now_ms);
+        if self.pending_asr.is_some()
+            && self
+                .translation
+                .as_ref()
+                .and_then(|worker| worker.local_snapshot())
+                .is_some_and(|snapshot| snapshot.ready || snapshot.finished)
+            && let Some(config) = self.pending_asr.take()
+        {
+            let result = (|| -> anyhow::Result<_> {
+                let (capture, frames) =
+                    subveil_audio::Capture::start_with_frames(config.sample_rate)?;
+                let recognition =
+                    subveil_asr::Recognition::start(config, self.subtitles.session_id(), frames)?;
+                Ok((capture, recognition))
+            })();
+            match result {
+                Ok((capture, recognition)) => {
+                    self.audio_capture = Some(capture);
+                    self.recognition = Some(recognition);
+                    self.message =
+                        "本地模型准备完成，已开始采集与识别。翻译加载失败时仅继续识别原文。".into();
+                }
+                Err(error) => {
+                    self.translation = None;
+                    self.message = format!("无法启动采集与识别：{error}");
+                }
+            }
+            changed = true;
+        }
+        let (translation_changed, installed_translation) = self.translation_models.poll();
+        changed |= translation_changed;
+        if let Some((path, model)) = installed_translation {
+            self.translation_model = Some(path);
+            self.translation_provider = subveil_translate::Provider::Local;
+            self.translation_status = format!("{} 已选用；开始识别时加载，不上传文本", model.name);
+        }
         let (model_changed, installed) = self.local_models.poll();
         changed |= model_changed;
         if let Some((path, model)) = installed {
@@ -156,10 +303,14 @@ impl Session {
                             (final_segment, &self.translation)
                             && self.subtitles.request_translation(segment.key)
                         {
-                            translation.submit(subveil_translate::Request::new(
+                            let mut request = subveil_translate::Request::new(
                                 segment,
                                 self.asr_config.target_language.clone(),
-                            ));
+                            );
+                            if self.translation_provider == subveil_translate::Provider::Local {
+                                request.deadline = Instant::now() + Duration::from_secs(30);
+                            }
+                            translation.submit(request);
                         }
                     }
                 }
@@ -193,6 +344,10 @@ impl Session {
             }
         }
         if let Some(translation) = &self.translation {
+            if let Some(snapshot) = translation.local_snapshot() {
+                changed |= self.translation_status != snapshot.status;
+                self.translation_status = snapshot.status;
+            }
             let dropped = translation.dropped();
             changed |= self.translation_dropped != dropped;
             self.translation_dropped = dropped;
@@ -221,7 +376,7 @@ impl Session {
     }
 
     pub fn start(&mut self, cx: &mut Context<Self>) {
-        if self.running || self.recognition.is_some() {
+        if self.running || self.asr_active() {
             return;
         }
         self.subtitles
@@ -237,6 +392,7 @@ impl Session {
 
     pub fn stop(&mut self, cx: &mut Context<Self>) {
         self.running = false;
+        self.pending_asr = None;
         self.translation = None;
         self.allow_text_upload = false;
         self.translation_status = "文字翻译已停止；文本上传授权已撤销".into();
@@ -259,7 +415,7 @@ impl Session {
     }
 
     pub fn toggle_audio(&mut self, cx: &mut Context<Self>) {
-        if self.recognition.is_some() {
+        if self.asr_active() {
             self.stop(cx);
             return;
         }
@@ -295,11 +451,14 @@ impl Session {
     }
 
     pub fn asr_active(&self) -> bool {
-        self.recognition.is_some()
+        self.recognition.is_some() || self.pending_asr.is_some()
     }
 
     pub fn select_asr_provider(&mut self, provider: subveil_asr::Provider, cx: &mut Context<Self>) {
-        if self.recognition.is_none() && !self.local_models.downloading() {
+        if !self.asr_active()
+            && !self.local_models.downloading()
+            && (!self.offline || !provider.is_cloud())
+        {
             self.asr_config.provider = provider;
             if provider == subveil_asr::Provider::Local {
                 self.audio.sample_rate = self.asr_config.sample_rate;
@@ -317,7 +476,7 @@ impl Session {
     }
 
     pub fn cycle_target_language(&mut self, cx: &mut Context<Self>) {
-        if self.recognition.is_none() {
+        if !self.asr_active() {
             self.asr_config.target_language = match self.asr_config.target_language.as_str() {
                 "zh" => "en",
                 "en" => "ja",
@@ -329,7 +488,7 @@ impl Session {
     }
 
     pub fn cycle_asr_language(&mut self, cx: &mut Context<Self>) {
-        if self.recognition.is_none() && !self.local_models.downloading() {
+        if !self.asr_active() && !self.local_models.downloading() {
             if self.asr_config.provider == subveil_asr::Provider::Local {
                 if let Some(index) = self
                     .local_languages
@@ -355,12 +514,18 @@ impl Session {
     }
 
     pub fn toggle_asr(&mut self, cx: &mut Context<Self>) {
-        if self.local_models.downloading() || self.importing_model {
+        if self.restoring_local {
+            return;
+        }
+        if self.local_models.downloading()
+            || self.translation_models.downloading()
+            || self.importing_model
+        {
             self.message = "请等待模型安装或导入完成，再开始识别。".into();
             cx.notify();
             return;
         }
-        if self.recognition.is_some() {
+        if self.asr_active() {
             self.stop(cx);
             return;
         }
@@ -380,23 +545,43 @@ impl Session {
         };
         config.allow_cloud = config.provider.is_cloud();
         let result = (|| -> anyhow::Result<_> {
+            anyhow::ensure!(
+                !self.offline
+                    || (!config.provider.is_cloud()
+                        && matches!(
+                            self.translation_provider,
+                            subveil_translate::Provider::Disabled
+                                | subveil_translate::Provider::Local
+                        )),
+                "离线模式禁止云端识别或文字翻译"
+            );
             config.validate()?;
             let id = self.subtitles.session_id().saturating_add(1);
             let translation = if self.translation_provider != subveil_translate::Provider::Disabled
                 && !config.provider.translates()
             {
-                match subveil_translate::HttpTranslator::from_env(
-                    self.translation_provider,
-                    self.allow_text_upload,
-                )
-                .and_then(|backend| {
-                    self.translation_status = format!(
-                        "文字翻译：{} · {}",
-                        self.translation_provider.name(),
-                        backend.destination()
-                    );
-                    subveil_translate::Translation::start(backend, id)
-                }) {
+                let backend = if self.translation_provider == subveil_translate::Provider::Local {
+                    self.translation_model
+                        .clone()
+                        .ok_or_else(|| anyhow::anyhow!("请安装或导入本地翻译模型"))
+                        .and_then(|path| {
+                            subveil_translate::Translation::start_local(path, self.compute, id)
+                        })
+                } else {
+                    subveil_translate::HttpTranslator::from_env(
+                        self.translation_provider,
+                        self.allow_text_upload,
+                    )
+                    .and_then(|backend| {
+                        self.translation_status = format!(
+                            "文字翻译：{} · {}",
+                            self.translation_provider.name(),
+                            backend.destination()
+                        );
+                        subveil_translate::Translation::start(backend, id)
+                    })
+                };
+                match backend {
                     Ok(worker) => Some(worker),
                     Err(error) => {
                         self.translation_status = format!("文字翻译未启动：{error}；ASR 继续运行");
@@ -406,21 +591,39 @@ impl Session {
             } else {
                 None
             };
-            let (capture, frames) = subveil_audio::Capture::start_with_frames(config.sample_rate)?;
-            let recognition = subveil_asr::Recognition::start(config, id, frames)?;
-            Ok((capture, recognition, translation, id))
+            let defer_capture = self.translation_provider == subveil_translate::Provider::Local
+                && translation.is_some();
+            let (capture, recognition) = if defer_capture {
+                (None, None)
+            } else {
+                let (capture, frames) =
+                    subveil_audio::Capture::start_with_frames(config.sample_rate)?;
+                let recognition = subveil_asr::Recognition::start(config.clone(), id, frames)?;
+                (Some(capture), Some(recognition))
+            };
+            Ok((
+                capture,
+                recognition,
+                translation,
+                id,
+                defer_capture.then_some(config),
+            ))
         })();
         match result {
-            Ok((capture, recognition, translation, id)) => {
+            Ok((capture, recognition, translation, id, pending)) => {
                 self.translation = translation;
                 self.translation_dropped = 0;
                 self.running = false;
                 self.subtitles.reset(id);
                 self.started = Instant::now();
-                self.audio_capture = Some(capture);
-                self.recognition = Some(recognition);
+                self.audio_capture = capture;
+                self.recognition = recognition;
+                self.pending_asr = pending;
                 self.asr_stopping = false;
                 self.audio_stopping = false;
+                if self.pending_asr.is_some() {
+                    self.asr.status = "等待本地翻译模型加载；尚未采集音频".into();
+                }
                 self.message = if self.asr_config.provider == subveil_asr::Provider::Mock {
                     "Mock ASR 仅按音频能量输出预设样本，不是真实识别。".into()
                 } else if self.asr_config.provider == subveil_asr::Provider::Local {
@@ -452,17 +655,33 @@ impl Session {
             return;
         }
         self.translation_provider = match self.translation_provider {
-            subveil_translate::Provider::Disabled => subveil_translate::Provider::OpenAi,
+            subveil_translate::Provider::Disabled => subveil_translate::Provider::Local,
+            subveil_translate::Provider::Local if self.offline => {
+                subveil_translate::Provider::Disabled
+            }
+            subveil_translate::Provider::Local => subveil_translate::Provider::OpenAi,
             subveil_translate::Provider::OpenAi => subveil_translate::Provider::DeepL,
             subveil_translate::Provider::DeepL => subveil_translate::Provider::Disabled,
         };
         self.allow_text_upload = false;
-        self.translation_status = "切换服务后需要重新授权文本上传".into();
+        self.translation_status =
+            if self.translation_provider == subveil_translate::Provider::Local {
+                "本地翻译不上传文本；请安装或导入翻译模型"
+            } else {
+                "切换服务后需要重新授权文本上传"
+            }
+            .into();
         cx.notify();
     }
 
     pub fn consent_text_upload(&mut self, cx: &mut Context<Self>) {
-        if !self.asr_active() {
+        if !self.asr_active()
+            && !self.offline
+            && matches!(
+                self.translation_provider,
+                subveil_translate::Provider::OpenAi | subveil_translate::Provider::DeepL
+            )
+        {
             self.allow_text_upload = !self.allow_text_upload;
             self.translation_status = if self.allow_text_upload {
                 "已授权本次会话；开始识别后才发送文本"
@@ -475,7 +694,11 @@ impl Session {
     }
 
     pub fn import_model(&mut self, cx: &mut Context<Self>) {
-        if self.asr_active() || self.importing_model || self.local_models.downloading() {
+        if self.asr_active()
+            || self.importing_model
+            || self.local_models.downloading()
+            || self.translation_models.downloading()
+        {
             return;
         }
         let picker = cx.prompt_for_paths(gpui_kit::PathPromptOptions {
@@ -516,6 +739,21 @@ impl Session {
     }
 
     fn apply_local_model(&mut self, path: PathBuf, metadata: subveil_asr::ModelMetadata) {
+        if metadata.kind == subveil_asr::ModelKind::QwenTranslation {
+            self.translation_model = Some(path);
+            self.translation_provider = subveil_translate::Provider::Local;
+            self.translation_status = "本地翻译模型已导入；开始识别后校验并加载".into();
+            return;
+        }
+        if let Some(root) = &self.local_models.root
+            && let Some(index) = self
+                .local_models
+                .catalog
+                .iter()
+                .position(|model| model.manifest_path(root) == path)
+        {
+            self.local_models.selected = index;
+        }
         self.model_info = format!(
             "{} · {} Hz · {}\n{}\n来源：{}\n许可证：{}",
             path.display(),
@@ -546,13 +784,120 @@ impl Session {
     }
     pub fn install_local_model(&mut self, cx: &mut Context<Self>) {
         if !self.asr_active() && !self.importing_model {
-            self.local_models.install();
+            self.local_models.install(!self.offline);
             cx.notify();
         }
     }
     pub fn cancel_model_install(&mut self, cx: &mut Context<Self>) {
         self.local_models.cancel();
         cx.notify();
+    }
+
+    pub fn install_translation_model(&mut self, cx: &mut Context<Self>) {
+        if !self.asr_active() && !self.importing_model {
+            self.translation_models.install(!self.offline);
+            cx.notify();
+        }
+    }
+    pub fn cancel_translation_install(&mut self, cx: &mut Context<Self>) {
+        self.translation_models.cancel();
+        cx.notify();
+    }
+    pub fn cycle_compute(&mut self, cx: &mut Context<Self>) {
+        if self.asr_active() {
+            return;
+        }
+        self.compute = match self.compute {
+            subveil_translate::Compute::Cpu => self
+                .gpu_devices
+                .first()
+                .map(|d| subveil_translate::Compute::Gpu(d.index))
+                .unwrap_or_default(),
+            subveil_translate::Compute::Gpu(index) => self
+                .gpu_devices
+                .iter()
+                .position(|d| d.index == index)
+                .and_then(|position| self.gpu_devices.get(position + 1))
+                .map(|d| subveil_translate::Compute::Gpu(d.index))
+                .unwrap_or_default(),
+        };
+        cx.notify();
+    }
+    pub fn toggle_offline(&mut self, cx: &mut Context<Self>) {
+        if self.asr_active()
+            || self.local_models.downloading()
+            || self.translation_models.downloading()
+        {
+            return;
+        }
+        self.offline = !self.offline;
+        self.allow_text_upload = false;
+        if self.offline {
+            self.asr_config.provider = subveil_asr::Provider::Local;
+            self.translation_provider = subveil_translate::Provider::Local;
+        }
+        self.message = if self.offline {
+            "离线模式：禁止云端识别、文本上传与模型下载；仅校验并使用本机文件。"
+        } else {
+            "离线限制已关闭；云端服务仍需显式授权。"
+        }
+        .into();
+        cx.notify();
+    }
+
+    pub fn save_local_settings(&mut self, cx: &mut Context<Self>) {
+        if self.saving_local || self.restoring_local {
+            return;
+        }
+        let Some(path) = self
+            .config_path
+            .as_ref()
+            .map(|p| p.with_file_name("local-models.toml"))
+        else {
+            self.message = "没有可用的设置目录".into();
+            cx.notify();
+            return;
+        };
+        let gpu_name = match self.compute {
+            subveil_translate::Compute::Cpu => None,
+            subveil_translate::Compute::Gpu(index) => {
+                let Some(device) = self.gpu_devices.iter().find(|device| device.index == index)
+                else {
+                    self.message = "所选 GPU 不可用，请重新选择运行设备再保存".into();
+                    cx.notify();
+                    return;
+                };
+                Some(device.name.clone())
+            }
+        };
+        let preferences = storage::LocalPreferences {
+            asr_model: self.asr_config.local_model.clone(),
+            translation_model: self.translation_model.clone(),
+            language: self.asr_config.language.clone(),
+            target: self.asr_config.target_language.clone(),
+            offline: self.offline,
+            gpu_name,
+        };
+        self.saving_local = true;
+        cx.notify();
+        cx.spawn(async move |session, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { storage::save_local(&path, &preferences) })
+                .await;
+            let _ = session.update(cx, |session, cx| {
+                session.saving_local = false;
+                session.message = match result {
+                    Ok(()) => {
+                        "本地模型、语言、设备与离线设置已保存；不会保存上传授权或自动开始采集"
+                            .into()
+                    }
+                    Err(error) => format!("本地设置保存失败：{error}"),
+                };
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub fn overlay_visible(&self) -> bool {
@@ -700,7 +1045,9 @@ impl Session {
                 || self.overlay_requested
                 || self.audio_capture.is_some()
                 || self.recognition.is_some()
+                || self.pending_asr.is_some()
                 || self.local_models.downloading()
+                || self.translation_models.downloading()
             {
                 let session = cx.entity();
                 cx.defer(move |cx| match ui::open_recovery(session.clone(), cx) {

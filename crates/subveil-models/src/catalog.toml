@@ -85,3 +85,22 @@ sha256 = "a8e0e4ec53810e433789b54a5c0134a7eaa2ffca595a6334d54c00da858841d3"
 path = "README.md"
 size = 296
 sha256 = "b6f9458f4208ae821beaaf11dc983486916a4089a2f3677b40f9ff06ec4e6440"
+[[models]]
+id = "qwen2.5-1.5b-translation-q4"
+name = "Qwen2.5 1.5B Instruct Q4_K_M"
+summary = "中英日离线文字翻译；CPU 或 Vulkan GPU，约需 2 GB 可用内存/显存。小模型译文需按实际内容核对。"
+repository = "Qwen/Qwen2.5-1.5B-Instruct-GGUF"
+revision = "91cad51170dc346986eccefdc2dd33a9da36ead9"
+kind = "qwen_translation"
+sample_rate = 0
+languages = ["en", "ja", "zh"]
+license = "Apache-2.0"
+license_url = "https://www.apache.org/licenses/LICENSE-2.0"
+[[models.files]]
+path = "qwen2.5-1.5b-instruct-q4_k_m.gguf"
+size = 1117320736
+sha256 = "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e"
+[[models.files]]
+path = "README.md"
+size = 4856
+sha256 = "57c72d4010fb11a98fc8e62dc8ef112b23a7a7525b71e571ca978d35cb3b2eec"

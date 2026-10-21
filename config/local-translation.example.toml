@@ -1,0 +1,12 @@
+# Place this manifest beside the official pinned GGUF file, or use the in-app installer.
+kind = "qwen_translation"
+language = "en"
+languages = ["en", "ja", "zh"]
+# Zero denotes text-only input; this package is not an ASR model.
+sample_rate = 0
+source = "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/tree/91cad51170dc346986eccefdc2dd33a9da36ead9"
+license = "Apache-2.0 — https://www.apache.org/licenses/LICENSE-2.0"
+
+[model]
+path = "qwen2.5-1.5b-instruct-q4_k_m.gguf"
+sha256 = "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e"
