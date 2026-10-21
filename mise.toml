@@ -1,5 +1,5 @@
 [tools]
-rust = { version = "1.99.1", components = ["rustfmt", "clippy"] }
+rust = { version = "1.99.1", components = ["rust-analyzer", "rust-src", "clippy", "rustfmt"] }
 
 [tasks.doctor]
 description = "Check Rust and Linux native development dependencies"

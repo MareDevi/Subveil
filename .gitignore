@@ -5,3 +5,15 @@
 .env
 .env.*
 !.env.example
+
+# >>> magpie: library skills placed here (magpie adds and removes these lines) >>>
+/.agents/skills/caveman
+/.agents/skills/caveman-commit
+/.agents/skills/caveman-review
+/.agents/skills/context7-mcp
+/.agents/skills/gpui-kit
+/.agents/skills/gpui-kit-design-guides
+/.agents/skills/investigate-first
+/.agents/skills/rust-best-practices
+/.agents/skills/surgical-patch
+# <<< magpie <<<
