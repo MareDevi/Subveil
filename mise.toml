@@ -23,6 +23,10 @@ run = "cargo run --locked -p subveil -- --demo"
 description = "Validate local PipeWire capture: optional seconds and sample rate"
 run = "cargo run --locked -p subveil-audio --example probe --"
 
+[tasks."audio:isolation"]
+description = "Verify two synthetic playback streams remain isolated, with no recording or upload"
+run = "timeout 90s cargo run --locked -p subveil-audio --example isolation_probe"
+
 [tasks."asr:probe"]
 description = "Explicit ASR diagnostic; cloud requires --allow-upload"
 run = "timeout 90s cargo run --locked -p subveil-asr --example asr_probe --"

@@ -134,6 +134,8 @@ fn section(title: &'static str, description: &'static str, cx: &App) -> gpui_kit
 }
 
 pub struct ControlView {
+    audio_source: Entity<SelectState<Vec<SharedString>>>,
+    audio_source_items: Vec<SharedString>,
     session: Entity<Session>,
     page: usize,
     focus: FocusHandle,
@@ -153,6 +155,26 @@ pub struct ControlView {
 impl ControlView {
     fn new(session: Entity<Session>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let current = session.read(cx).asr_config.provider;
+        let audio_source_items: Vec<_> = session
+            .read(cx)
+            .source_labels()
+            .into_iter()
+            .map(SharedString::from)
+            .collect();
+        let audio_source = cx.new(|cx| {
+            SelectState::new(
+                audio_source_items.clone(),
+                Some(IndexPath::new(0)),
+                window,
+                cx,
+            )
+        });
+        let source_owner = session.clone();
+        let source_selected = cx.subscribe(&audio_source, move |_, _, event, cx| {
+            if let SelectEvent::Confirm(Some(label)) = event {
+                source_owner.update(cx, |s, cx| s.select_audio_source(label.as_ref(), cx));
+            }
+        });
         let provider: Entity<SelectState<Vec<SharedString>>> = cx.new(|cx| {
             SelectState::new(
                 subveil_asr::Provider::ALL
@@ -303,6 +325,22 @@ impl ControlView {
             },
         );
         let observed = cx.observe_in(&session, window, |this, session, window, cx| {
+            let sources: Vec<_> = session
+                .read(cx)
+                .source_labels()
+                .into_iter()
+                .map(SharedString::from)
+                .collect();
+            if sources != this.audio_source_items {
+                this.audio_source_items = sources.clone();
+                this.audio_source
+                    .update(cx, |s, cx| s.set_items(sources, window, cx));
+            }
+            let selected = SharedString::from(session.read(cx).selected_source_label());
+            if this.audio_source.read(cx).selected_value() != Some(&selected) {
+                this.audio_source
+                    .update(cx, |s, cx| s.set_selected_value(&selected, window, cx));
+            }
             let text_items = session
                 .read(cx)
                 .cloud_text_models
@@ -381,6 +419,7 @@ impl ControlView {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         input_subscriptions.extend([
+            source_selected,
             observed,
             selected,
             model_selected,
@@ -389,6 +428,8 @@ impl ControlView {
         ]);
         let credentials_generation = session.read(cx).credentials_generation;
         Self {
+            audio_source,
+            audio_source_items,
             session,
             page: if current == subveil_asr::Provider::Local {
                 4

@@ -3,7 +3,14 @@ use std::time::{Duration, Instant};
 use subveil_audio::Capture;
 
 fn main() -> anyhow::Result<()> {
-    let mut args = std::env::args().skip(1);
+    let arguments: Vec<_> = std::env::args().skip(1).collect();
+    if arguments.first().is_some_and(|s| s == "--list") {
+        for source in subveil_audio::sources()? {
+            println!("{} {:?} {}", source.serial, source.kind, source.label);
+        }
+        return Ok(());
+    }
+    let mut args = arguments.into_iter();
     let seconds = args
         .next()
         .map(|s| s.parse::<u64>())
@@ -14,11 +21,21 @@ fn main() -> anyhow::Result<()> {
         .map(|s| s.parse::<u32>())
         .transpose()?
         .unwrap_or(48_000);
+    let selected = args.next().map(|s| s.parse::<u64>()).transpose()?;
     anyhow::ensure!(
         args.next().is_none(),
-        "usage: probe [seconds] [sample_rate]"
+        "usage: probe [--list | seconds sample_rate [SOURCE_SERIAL]]"
     );
-    let capture = Capture::start(rate)?;
+    anyhow::ensure!(seconds <= 60, "诊断最多 60 秒");
+    let capture = if let Some(serial) = selected {
+        let source = subveil_audio::sources()?
+            .into_iter()
+            .find(|s| s.serial == serial)
+            .ok_or_else(|| anyhow::anyhow!("所选音源已断开"))?;
+        Capture::start_target(rate, subveil_audio::CaptureTarget::Node(source))?.0
+    } else {
+        Capture::start(rate)?
+    };
     let started = Instant::now();
     while started.elapsed() < Duration::from_secs(seconds) {
         std::thread::sleep(Duration::from_secs(1));

@@ -89,6 +89,30 @@ impl ControlView {
                 "查看当前原文与服务译文，控制桌面字幕浮窗。",
                 cx,
             ))
+            .child(field(
+                "音源",
+                Select::new(&self.audio_source)
+                    .w_full()
+                    .accessibility_label("采集音源")
+                    .disabled(
+                        session.audio_active()
+                            || session.asr_active()
+                            || session.audio_stopping
+                            || session.asr_stopping,
+                    ),
+                cx,
+            ))
+            .child(
+                button(
+                    "refresh-audio-sources",
+                    "刷新音源",
+                    &self.session,
+                    Session::refresh_audio_sources,
+                )
+                .disabled(session.refreshing_sources)
+                .loading(session.refreshing_sources),
+            )
+            .child(help(session.source_status.clone(), cx))
             .child(
                 row()
                     .child(

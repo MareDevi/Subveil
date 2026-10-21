@@ -151,6 +151,30 @@ impl PcmQueue {
             left -= size;
         }
     }
+    pub fn push_stereo(&mut self, bytes: &[u8], generation: u64, rate: u32) {
+        if !bytes.len().is_multiple_of(8) {
+            self.invalid += 1;
+            return;
+        }
+        // Fixed stack workspace; no inference, heap allocation or waiting in
+        // the PipeWire callback. Sanitize each channel before mixing.
+        let mut mono = [0_u8; SAMPLES * 4];
+        for part in bytes.chunks(SAMPLES * 8) {
+            for (index, pair) in part.as_chunks::<8>().0.iter().enumerate() {
+                let sample = |raw: &[u8]| {
+                    let value = f32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]);
+                    if value.is_finite() {
+                        value.clamp(-1., 1.)
+                    } else {
+                        0.
+                    }
+                };
+                let value = (sample(&pair[..4]) + sample(&pair[4..])) * 0.5;
+                mono[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
+            }
+            self.push(&mono[..part.len() / 2], generation, rate);
+        }
+    }
 
     pub fn discard(&mut self) {
         while let Some(block) = self.queue.pop() {
@@ -213,6 +237,19 @@ impl PcmQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stereo_downmix_is_bounded_and_sanitizes_channels_before_averaging() {
+        let mut q = PcmQueue::new();
+        let bytes: Vec<_> = [1_f32, -1., f32::NAN, 1.]
+            .into_iter()
+            .flat_map(f32::to_le_bytes)
+            .collect();
+        q.push_stereo(&bytes, 1, 48000);
+        let block = q.queue.pop();
+        assert!(block.is_some_and(|b| b.len == 2 && b.samples[..2] == [0., 0.5]));
+        q.push_stereo(&[0; 7], 1, 48000);
+        assert_eq!(q.invalid, 1);
+    }
     #[test]
     fn overflow_keeps_latest_and_counts_exact_samples() {
         let mut q = PcmQueue::new();

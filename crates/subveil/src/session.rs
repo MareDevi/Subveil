@@ -22,6 +22,10 @@ pub struct Session {
     pub config_path: Option<PathBuf>,
     pub saving: bool,
     pub audio: subveil_audio::Snapshot,
+    pub audio_sources: Vec<subveil_audio::Source>,
+    pub capture_target: subveil_audio::CaptureTarget,
+    pub source_status: String,
+    pub refreshing_sources: bool,
     audio_capture: Option<subveil_audio::Capture>,
     recognition: Option<subveil_asr::Recognition>,
     pending_asr: Option<subveil_asr::Config>,
@@ -70,6 +74,68 @@ pub struct Session {
 }
 
 impl Session {
+    pub fn source_labels(&self) -> Vec<String> {
+        let mut labels = vec!["默认系统输出".into()];
+        labels.extend(
+            self.audio_sources
+                .iter()
+                .map(subveil_audio::Source::picker_label),
+        );
+        if let subveil_audio::CaptureTarget::Node(source) = &self.capture_target
+            && !labels.contains(&source.picker_label())
+        {
+            labels.push(source.picker_label());
+        }
+        labels
+    }
+    pub fn selected_source_label(&self) -> String {
+        match &self.capture_target {
+            subveil_audio::CaptureTarget::DefaultOutput => "默认系统输出".into(),
+            subveil_audio::CaptureTarget::Node(source) => source.picker_label(),
+        }
+    }
+    pub fn select_audio_source(&mut self, label: &str, cx: &mut Context<Self>) {
+        if self.audio_active() || self.asr_active() || self.audio_stopping || self.asr_stopping {
+            return;
+        }
+        if label == "默认系统输出" {
+            self.capture_target = subveil_audio::CaptureTarget::DefaultOutput;
+        } else if let Some(source) = self
+            .audio_sources
+            .iter()
+            .find(|s| s.picker_label() == label)
+        {
+            self.capture_target = subveil_audio::CaptureTarget::Node(source.clone());
+        } else {
+            self.source_status = "所选音源已断开；请刷新并重新选择".into();
+        }
+        cx.notify();
+    }
+    pub fn refresh_audio_sources(&mut self, cx: &mut Context<Self>) {
+        if self.refreshing_sources {
+            return;
+        }
+        self.refreshing_sources = true;
+        cx.spawn(async move |owner, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async { subveil_audio::sources() })
+                .await;
+            let _ = owner.update(cx, |s, cx| {
+                s.refreshing_sources = false;
+                match result {
+                    Ok(sources) => {
+                        s.source_status =
+                            format!("可选音源 {} 个；断开后不会回退到系统混音", sources.len());
+                        s.audio_sources = sources;
+                    }
+                    Err(error) => s.source_status = format!("音源查询失败：{error}"),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
     fn watch_signal(&mut self, signal: subveil_core::signal::Signal, cx: &mut Context<Self>) {
         self._notifications.push(cx.spawn(async move |session, cx| {
             loop {
@@ -86,6 +152,10 @@ impl Session {
         config_error: Option<String>,
         cx: &mut Context<Self>,
     ) -> Self {
+        cx.spawn(async move |owner, cx| {
+            let _ = owner.update(cx, |s: &mut Self, cx| s.refresh_audio_sources(cx));
+        })
+        .detach();
         let timer = cx.spawn(async move |session, cx| {
             loop {
                 cx.background_executor()
@@ -211,6 +281,10 @@ impl Session {
             config_path,
             saving: false,
             audio: subveil_audio::Snapshot::default(),
+            audio_sources: Vec::new(),
+            capture_target: subveil_audio::CaptureTarget::DefaultOutput,
+            source_status: "正在查询音源…".into(),
+            refreshing_sources: false,
             audio_capture: None,
             recognition: None,
             pending_asr: None,
@@ -278,8 +352,10 @@ impl Session {
             && let Some(config) = self.pending_asr.take()
         {
             let result = (|| -> anyhow::Result<_> {
-                let (capture, frames) =
-                    subveil_audio::Capture::start_with_frames(config.sample_rate)?;
+                let (capture, frames) = subveil_audio::Capture::start_target(
+                    config.sample_rate,
+                    self.capture_target.clone(),
+                )?;
                 let recognition =
                     subveil_asr::Recognition::start(config, self.subtitles.session_id(), frames)?;
                 Ok((capture, recognition))
@@ -543,7 +619,12 @@ impl Session {
             self.audio_stopping = true;
             self.audio.status = "正在停止采集…".into();
         } else {
-            match subveil_audio::Capture::start(self.audio.sample_rate) {
+            match subveil_audio::Capture::start_target(
+                self.audio.sample_rate,
+                self.capture_target.clone(),
+            )
+            .map(|(capture, _)| capture)
+            {
                 Ok(capture) => {
                     self.audio = subveil_audio::Snapshot {
                         sample_rate: self.audio.sample_rate,
@@ -891,8 +972,10 @@ impl Session {
             let (capture, recognition) = if defer_capture {
                 (None, None)
             } else {
-                let (capture, frames) =
-                    subveil_audio::Capture::start_with_frames(config.sample_rate)?;
+                let (capture, frames) = subveil_audio::Capture::start_target(
+                    config.sample_rate,
+                    self.capture_target.clone(),
+                )?;
                 let recognition = subveil_asr::Recognition::start(config.clone(), id, frames)?;
                 (Some(capture), Some(recognition))
             };

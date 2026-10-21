@@ -17,6 +17,53 @@ mod pcm;
 
 pub use pcm::{AudioFrame, FrameReceiver, FrameSender};
 
+/// PipeWire node role, distinct from a reusable numeric object ID.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SourceKind {
+    /// One application's playback stream, copied without changing its routing.
+    Playback,
+    /// A particular output device's monitor.
+    Output,
+    /// A microphone or other explicit source node.
+    Input,
+}
+/// One source lifetime. Server cookie and object serial prevent ID recycling.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Source {
+    /// Server lifetime identifier.
+    pub server: u32,
+    /// Object serial, never a recycled global ID.
+    pub serial: u64,
+    /// Underlying node role.
+    pub kind: SourceKind,
+    /// Human-readable source and stream description.
+    pub label: String,
+}
+impl Source {
+    /// Unique picker label, even when two tabs have the same application name.
+    pub fn picker_label(&self) -> String {
+        format!("{} · {}", self.label, self.serial)
+    }
+}
+/// Explicit capture scope. A missing selected node never falls back to system mix.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum CaptureTarget {
+    /// Follow the default output monitor, as explicitly selected by the user.
+    #[default]
+    DefaultOutput,
+    /// Capture this exact source lifetime.
+    Node(Source),
+}
+/// Discover available source metadata without starting PCM capture.
+pub fn sources() -> anyhow::Result<Vec<Source>> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::sources()
+    }
+    #[cfg(not(target_os = "linux"))]
+    anyhow::bail!("音源选择当前需要 Linux PipeWire")
+}
+
 /// Local audio status, independent of any GUI window.
 #[derive(Clone, Debug)]
 pub struct Snapshot {
@@ -76,17 +123,34 @@ impl Capture {
     /// Starts local capture at a caller-selected rate (8–192 kHz).
     /// Errors if unsupported or if the worker cannot be created.
     pub fn start(sample_rate: u32) -> anyhow::Result<Self> {
-        Self::start_inner(sample_rate, None)
+        Self::start_inner(sample_rate, None, CaptureTarget::DefaultOutput)
     }
 
     /// Starts capture with a bounded, independent PCM consumer for recognition.
     pub fn start_with_frames(sample_rate: u32) -> anyhow::Result<(Self, FrameReceiver)> {
         let frames = FrameReceiver::new();
-        let capture = Self::start_inner(sample_rate, Some(frames.clone()))?;
+        let capture = Self::start_inner(
+            sample_rate,
+            Some(frames.clone()),
+            CaptureTarget::DefaultOutput,
+        )?;
+        Ok((capture, frames))
+    }
+    /// Start an explicitly selected source with the same bounded PCM handoff.
+    pub fn start_target(
+        sample_rate: u32,
+        target: CaptureTarget,
+    ) -> anyhow::Result<(Self, FrameReceiver)> {
+        let frames = FrameReceiver::new();
+        let capture = Self::start_inner(sample_rate, Some(frames.clone()), target)?;
         Ok((capture, frames))
     }
 
-    fn start_inner(sample_rate: u32, frames: Option<FrameReceiver>) -> anyhow::Result<Self> {
+    fn start_inner(
+        sample_rate: u32,
+        frames: Option<FrameReceiver>,
+        target: CaptureTarget,
+    ) -> anyhow::Result<Self> {
         anyhow::ensure!(
             (8_000..=192_000).contains(&sample_rate),
             "sample rate must be 8000..=192000 Hz"
@@ -111,9 +175,13 @@ impl Capture {
                         ..Snapshot::default()
                     };
                     while !worker_stop.load(Ordering::Relaxed) {
-                        if let Err(error) =
-                            linux::run(&worker_stop, &worker_snapshot, &mut stats, frames.as_ref())
-                        {
+                        if let Err(error) = linux::run(
+                            &worker_stop,
+                            &worker_snapshot,
+                            &mut stats,
+                            frames.as_ref(),
+                            &target,
+                        ) {
                             stats.status = format!("连接失败，1 秒后重试：{error:#}");
                             stats.device = None;
                             stats.rms = 0.;
