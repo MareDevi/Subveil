@@ -44,7 +44,9 @@ pub enum TranslationState {
     NotRequested,
     /// A translation is in flight.
     Pending,
-    /// A cloud speech service is still revising its own translation.
+    /// A newer provisional translation is pending; keep the preceding draft readable.
+    PendingWithPreview(String),
+    /// Provisional translation from a stable Partial or a revising cloud service.
     Streaming(String),
     /// A matching translation completed.
     Complete(String),
@@ -66,6 +68,7 @@ pub struct Subtitle {
     expires_at_ms: u64,
     awaiting_read: bool,
     read_until_ms: Option<u64>,
+    provisional_request: Option<(SegmentKey, String)>,
 }
 
 /// Subtitle state owned by a session, never by a window.
@@ -119,7 +122,9 @@ impl SubtitleState {
         for entry in &mut self.entries {
             if matches!(
                 entry.translation,
-                TranslationState::Pending | TranslationState::Streaming(_)
+                TranslationState::Pending
+                    | TranslationState::PendingWithPreview(_)
+                    | TranslationState::Streaming(_)
             ) {
                 entry.translation = TranslationState::Failed("会话已停止，翻译已取消".into());
             }
@@ -196,14 +201,33 @@ impl SubtitleState {
             {
                 return false;
             }
+            let provisional_request = existing
+                .provisional_request
+                .as_ref()
+                .filter(|(_, prefix)| !is_final && transcript.text.starts_with(prefix))
+                .cloned();
+            let preview = if provisional_request.is_some() {
+                existing.translation.clone()
+            } else if !is_final && transcript.text.starts_with(&old.text) {
+                match &existing.translation {
+                    TranslationState::Streaming(text)
+                    | TranslationState::PendingWithPreview(text) => {
+                        TranslationState::Streaming(text.clone())
+                    }
+                    _ => TranslationState::NotRequested,
+                }
+            } else {
+                TranslationState::NotRequested
+            };
             *existing = Subtitle {
                 transcript,
                 is_final,
-                translation: TranslationState::NotRequested,
+                translation: preview,
                 expired: false,
                 expires_at_ms: now_ms.saturating_add(self.ttl_ms),
                 awaiting_read: false,
                 read_until_ms: None,
+                provisional_request,
             };
             return true;
         }
@@ -222,6 +246,7 @@ impl SubtitleState {
             expires_at_ms: now_ms.saturating_add(self.ttl_ms),
             awaiting_read: false,
             read_until_ms: None,
+            provisional_request: None,
         });
         while self.entries.len() > self.history_limit {
             self.entries.pop_front();
@@ -263,15 +288,97 @@ impl SubtitleState {
         true
     }
 
-    /// Mark a final revision pending, once. Partial events do not trigger translation.
+    /// Mark a Final revision pending, once. Partial callers use request_provisional_translation.
     pub fn request_translation(&mut self, key: SegmentKey) -> bool {
         let Some(entry) = self.matching(key) else {
             return false;
         };
-        if entry.expired || !entry.is_final || entry.translation != TranslationState::NotRequested {
+        if !entry.is_final {
             return false;
         }
-        entry.translation = TranslationState::Pending;
+        self.request_provisional_translation(key)
+    }
+
+    /// Mark an explicitly scheduled current revision pending; never starts work itself.
+    pub fn request_provisional_translation(&mut self, key: SegmentKey) -> bool {
+        let Some(entry) = self.matching(key) else {
+            return false;
+        };
+        if entry.expired {
+            return false;
+        }
+        entry.translation = match &entry.translation {
+            TranslationState::NotRequested => TranslationState::Pending,
+            TranslationState::Streaming(text) => TranslationState::PendingWithPreview(text.clone()),
+            _ => return false,
+        };
+        true
+    }
+
+    /// Associate a provisional request with the exact stable prefix sent to translation.
+    /// Tail revisions may advance while this immutable prefix is pending.
+    pub fn request_stable_prefix_translation(&mut self, key: SegmentKey, prefix: &str) -> bool {
+        let Some(entry) = self.matching(key) else {
+            return false;
+        };
+        if entry.is_final || prefix.is_empty() || !entry.transcript.text.starts_with(prefix) {
+            return false;
+        }
+        if !self.request_provisional_translation(key) {
+            return false;
+        }
+        if let Some(entry) = self.matching(key) {
+            entry.provisional_request = Some((key, prefix.into()));
+        }
+        true
+    }
+
+    /// Accept only the pending prefix request. Reject rewritten prefixes, newer requests,
+    /// Final promotions, evicted segments and stopped sessions, even for equal revisions.
+    pub fn finish_provisional_translation(
+        &mut self,
+        key: SegmentKey,
+        result: Result<String, String>,
+        now_ms: u64,
+    ) -> bool {
+        if key.session_id != self.session_id {
+            return false;
+        }
+        let ttl_ms = self.ttl_ms;
+        let Some(entry) = self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.transcript.key.segment_id == key.segment_id)
+        else {
+            return false;
+        };
+        let valid_prefix = entry
+            .provisional_request
+            .as_ref()
+            .is_some_and(|(requested, prefix)| {
+                *requested == key && entry.transcript.text.starts_with(prefix)
+            });
+        // The generic provisional API still uses exact source revision matching.
+        let exact_request = entry.provisional_request.is_none() && entry.transcript.key == key;
+        if entry.is_final
+            || (!valid_prefix && !exact_request)
+            || !matches!(
+                entry.translation,
+                TranslationState::Pending | TranslationState::PendingWithPreview(_)
+            )
+        {
+            return false;
+        }
+        let visible = !entry.expired && now_ms < entry.expires_at_ms;
+        entry.translation = match result {
+            Ok(text) => TranslationState::Streaming(text),
+            Err(error) => TranslationState::Failed(error),
+        };
+        if visible {
+            entry.expires_at_ms = now_ms.saturating_add(ttl_ms);
+        } else {
+            entry.expired = true;
+        }
         true
     }
 
@@ -286,11 +393,15 @@ impl SubtitleState {
         let Some(entry) = self.matching(key) else {
             return false;
         };
-        if entry.translation != TranslationState::Pending {
+        if !matches!(
+            entry.translation,
+            TranslationState::Pending | TranslationState::PendingWithPreview(_)
+        ) {
             return false;
         }
         let visible = !entry.expired && now_ms < entry.expires_at_ms;
         entry.translation = match result {
+            Ok(text) if !entry.is_final => TranslationState::Streaming(text),
             Ok(text) => TranslationState::Complete(text),
             Err(error) => TranslationState::Failed(error),
         };
@@ -341,6 +452,58 @@ mod tests {
             start_ms: 0,
             end_ms: 100,
         }
+    }
+
+    #[test]
+    fn prefix_request_survives_tail_growth_but_not_prefix_rewrite_or_newer_request() {
+        let mut state = SubtitleState::new(1, 10, 10_000);
+        let first = segment(1, 1, 1, "the driver is closing the gap");
+        assert!(state.apply(TranscriptEvent::Partial(first.clone()), 0));
+        assert!(state.request_stable_prefix_translation(first.key, "the driver is"));
+        let second = segment(1, 1, 2, "the driver is closing the gap to Leclerc");
+        assert!(state.apply(TranscriptEvent::Partial(second.clone()), 100));
+        assert!(state.finish_provisional_translation(first.key, Ok("车手正在".into()), 200));
+        assert!(state.request_stable_prefix_translation(second.key, "the driver is closing"));
+        assert!(!state.finish_provisional_translation(first.key, Ok("旧请求".into()), 300));
+        assert!(state.apply(
+            TranscriptEvent::Partial(segment(1, 1, 3, "the driver is slowing down")),
+            400
+        ));
+        assert!(!state.finish_provisional_translation(second.key, Ok("错误前缀".into()), 500));
+    }
+    #[test]
+    fn provisional_result_cannot_overwrite_same_revision_final_promotion() {
+        let mut state = SubtitleState::new(1, 10, 10_000);
+        let source = segment(1, 1, 1, "the driver is closing the gap");
+        assert!(state.apply(TranscriptEvent::Partial(source.clone()), 0));
+        assert!(!state.request_translation(source.key));
+        assert!(state.request_provisional_translation(source.key));
+        assert!(state.finish_provisional_translation(source.key, Ok("车手正在接近".into()), 100));
+        assert!(matches!(
+            state.history().back().map(|s| &s.translation),
+            Some(TranslationState::Streaming(_))
+        ));
+        assert!(state.apply(TranscriptEvent::Final(source.clone()), 200));
+        assert!(state.request_translation(source.key));
+        assert!(!state.finish_provisional_translation(source.key, Ok("过期临时译文".into()), 300));
+        assert!(state.finish_translation(source.key, Ok("车手正在缩小差距".into()), 400));
+        assert!(
+            matches!(state.history().back().map(|s| &s.translation), Some(TranslationState::Complete(text)) if text == "车手正在缩小差距")
+        );
+    }
+    #[test]
+    fn provisional_response_rejects_old_revision_and_stopped_session() {
+        let mut state = SubtitleState::new(1, 10, 10_000);
+        let first = segment(1, 1, 1, "the driver is closing");
+        assert!(state.apply(TranscriptEvent::Partial(first.clone()), 0));
+        assert!(state.request_provisional_translation(first.key));
+        assert!(state.apply(
+            TranscriptEvent::Partial(segment(1, 1, 2, "the driver is slowing")),
+            10
+        ));
+        assert!(!state.finish_provisional_translation(first.key, Ok("过期".into()), 20));
+        state.reset(2);
+        assert!(!state.finish_provisional_translation(first.key, Ok("过期".into()), 30));
     }
 
     #[test]

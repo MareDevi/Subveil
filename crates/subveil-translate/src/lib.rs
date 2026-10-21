@@ -1,10 +1,14 @@
-//! Final-only text translation with bounded queues, deadlines and session cancellation.
+//! Revisable text translation with bounded queues, deadlines and session cancellation.
 #![deny(missing_docs)]
+mod discovery;
 mod http;
+pub use discovery::text_models;
+mod scheduler;
+pub use scheduler::StreamingTranslationScheduler;
 mod local;
 use crossbeam_queue::ArrayQueue;
 use futures_util::future::BoxFuture;
-pub use http::{HttpTranslator, Provider};
+pub use http::{HttpTranslator, Provider, configured_destination};
 pub use local::{Compute, Device, LocalSnapshot, devices};
 use std::{
     collections::VecDeque,
@@ -21,6 +25,8 @@ use subveil_core::subtitle::{SegmentKey, TranscriptSegment};
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct Request {
+    /// Whether this request translates a stable Partial prefix rather than a Final.
+    pub provisional: bool,
     /// Exact source identity.
     pub segment: TranscriptSegment,
     /// Target language code.
@@ -31,9 +37,10 @@ pub struct Request {
     pub deadline: Instant,
 }
 impl Request {
-    /// Build a request. Caller submits only accepted Final revisions.
+    /// Build a Final request. Mark stable Partial requests provisional before submission.
     pub fn new(segment: TranscriptSegment, target: String) -> Self {
         Self {
+            provisional: false,
             segment,
             target,
             context: String::new(),
@@ -49,6 +56,8 @@ pub trait Translator: Send + 'static {
 /// Result associated with the exact source identity.
 #[non_exhaustive]
 pub struct Response {
+    /// Whether this response belongs to a provisional Partial request.
+    pub provisional: bool,
     /// Source revision.
     pub key: SegmentKey,
     /// Bounded translated text or sanitized error.
@@ -60,8 +69,19 @@ struct Shared {
     input: ArrayQueue<Request>,
     output: ArrayQueue<Response>,
     dropped: AtomicU64,
+    latest: Mutex<VecDeque<(SegmentKey, bool)>>,
 }
 impl Shared {
+    fn superseded(&self, request: &Request) -> bool {
+        self.latest
+            .lock()
+            .map(|latest| {
+                !latest.iter().any(|(key, provisional)| {
+                    *key == request.segment.key && *provisional == request.provisional
+                })
+            })
+            .unwrap_or(true)
+    }
     fn new() -> Self {
         Self {
             stop: AtomicBool::new(false),
@@ -69,6 +89,7 @@ impl Shared {
             input: ArrayQueue::new(8),
             output: ArrayQueue::new(64),
             dropped: AtomicU64::new(0),
+            latest: Mutex::new(VecDeque::new()),
         }
     }
 }
@@ -93,15 +114,26 @@ impl Translation {
             local: None,
         })
     }
-    /// Submit a Final. Evict oldest waiting request under overload and report its failure.
+    /// Submit an accepted revision. Evict oldest waiting request under overload and report its failure.
     pub fn submit(&self, request: Request) {
         if self.shared.stop.load(Ordering::Relaxed) {
             return;
+        }
+        if let Ok(mut latest) = self.shared.latest.lock() {
+            latest.retain(|(key, _)| {
+                key.session_id != request.segment.key.session_id
+                    || key.segment_id != request.segment.key.segment_id
+            });
+            latest.push_back((request.segment.key, request.provisional));
+            while latest.len() > 64 {
+                latest.pop_front();
+            }
         }
         if self.shared.closed.load(Ordering::Acquire) {
             emit(
                 &self.shared,
                 Response {
+                    provisional: request.provisional,
                     key: request.segment.key,
                     result: Err("本地翻译进程已停止；请重新开始识别".into()),
                 },
@@ -113,6 +145,7 @@ impl Translation {
             emit(
                 &self.shared,
                 Response {
+                    provisional: old.provisional,
                     key: old.segment.key,
                     result: Err("翻译队列已满；已丢弃旧请求".into()),
                 },
@@ -152,6 +185,7 @@ fn fail_pending(shared: &Shared) {
             emit(
                 shared,
                 Response {
+                    provisional: request.provisional,
                     key: request.segment.key,
                     result: Err("本地翻译进程已停止；请重新开始识别".into()),
                 },
@@ -166,7 +200,7 @@ async fn run(backend: impl Translator, session: u64, shared: &Shared) {
             tokio::time::sleep(Duration::from_millis(10)).await;
             continue;
         };
-        if request.segment.key.session_id != session {
+        if request.segment.key.session_id != session || shared.superseded(&request) {
             continue;
         }
         let result = if request.segment.text.is_empty()
@@ -186,12 +220,16 @@ async fn run(backend: impl Translator, session: u64, shared: &Shared) {
                     _ = tokio::time::sleep_until(request.deadline.into()) => break Err("翻译超时".into()),
                     _ = tokio::time::sleep(Duration::from_millis(10)) => {
                         if shared.stop.load(Ordering::Relaxed) { return; }
+                        if shared.superseded(&request) { break Err("翻译修订已被替代".into()); }
                     }
                 }
             }
         };
         if shared.stop.load(Ordering::Relaxed) {
             return;
+        }
+        if shared.superseded(&request) {
+            continue;
         }
         let result = result.and_then(|text| {
             if text.trim().is_empty() || text.len() > 16_384 {
@@ -201,13 +239,16 @@ async fn run(backend: impl Translator, session: u64, shared: &Shared) {
             }
         });
         // Retain at most three short source sentences, never an unlimited transcript.
-        history.push_back(request.segment.text.chars().take(1024).collect());
+        if !request.provisional {
+            history.push_back(request.segment.text.chars().take(1024).collect());
+        }
         while history.len() > 3 {
             history.pop_front();
         }
         emit(
             shared,
             Response {
+                provisional: request.provisional,
                 key: request.segment.key,
                 result,
             },
@@ -261,6 +302,35 @@ mod tests {
         assert!(responses[0].result.is_err());
         assert_eq!(responses[1].key, request(9, 3).segment.key);
         assert_eq!(responses[1].result.as_deref(), Ok("中文:hello"));
+        Ok(())
+    }
+    #[test]
+    fn queued_partials_coalesce_and_final_supersedes_same_revision() -> anyhow::Result<()> {
+        let shared = Arc::new(Shared::new());
+        let worker = Translation {
+            shared: shared.clone(),
+            local: None,
+        };
+        let mut partial = request(9, 1);
+        partial.provisional = true;
+        worker.submit(partial.clone());
+        let mut final_request = partial.clone();
+        final_request.provisional = false;
+        worker.submit(final_request.clone());
+        assert!(shared.superseded(&partial));
+        assert!(!shared.superseded(&final_request));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        runtime.block_on(async {
+            tokio::select! {
+                _ = run(Echo, 9, &shared) => {},
+                _ = tokio::time::sleep(Duration::from_millis(180)) => {},
+            }
+        });
+        let response = worker.pop();
+        assert!(response.is_some_and(|r| !r.provisional && r.result.is_ok()));
+        assert!(worker.pop().is_none());
         Ok(())
     }
     struct Hanging(Arc<AtomicBool>);

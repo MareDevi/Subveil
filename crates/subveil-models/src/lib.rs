@@ -112,7 +112,10 @@ impl Model {
         );
         ensure!(
             (self.repository.starts_with("csukuangfj/")
-                || self.repository == "Qwen/Qwen2.5-1.5B-Instruct-GGUF"
+                || matches!(
+                    self.repository.as_str(),
+                    "Qwen/Qwen2.5-1.5B-Instruct-GGUF" | "Qwen/Qwen2.5-0.5B-Instruct-GGUF"
+                )
                 || self.repository == "ggerganov/whisper.cpp")
                 && self.repository.split('/').count() == 2
                 && self.repository.split('/').all(token),
@@ -570,8 +573,20 @@ fn manifest_text(model: &Model) -> anyhow::Result<String> {
             ("tokens", "tokens.txt"),
         ],
         ModelKind::SenseVoice => vec![("model", "model.int8.onnx"), ("tokens", "tokens.txt")],
-        ModelKind::Whisper => vec![("model", "ggml-large-v3-turbo-q5_0.bin")],
-        ModelKind::QwenTranslation => vec![("model", "qwen2.5-1.5b-instruct-q4_k_m.gguf")],
+        ModelKind::Whisper | ModelKind::QwenTranslation => {
+            let extension = if model.kind == ModelKind::Whisper {
+                ".bin"
+            } else {
+                ".gguf"
+            };
+            let files = model
+                .files
+                .iter()
+                .filter(|file| file.path.ends_with(extension))
+                .collect::<Vec<_>>();
+            ensure!(files.len() == 1, "模型包必须包含恰好一个权重文件");
+            vec![("model", files[0].path.as_str())]
+        }
     } {
         let file = model
             .files

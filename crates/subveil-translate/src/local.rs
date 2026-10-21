@@ -226,13 +226,14 @@ fn run(
             thread::sleep(Duration::from_millis(10));
             continue;
         };
-        if request.segment.key.session_id != session {
+        if request.segment.key.session_id != session || shared.superseded(&request) {
             continue;
         }
         if let Err(error) = validate(&request) {
             emit(
                 shared,
                 Response {
+                    provisional: request.provisional,
                     key: request.segment.key,
                     result: Err(error.to_string()),
                 },
@@ -278,9 +279,13 @@ fn run(
                         .cloned()
                         .unwrap_or_else(|| ready_label.clone());
                 }
+                if shared.superseded(&request) {
+                    continue;
+                }
                 emit(
                     shared,
                     Response {
+                        provisional: request.provisional,
                         key: request.segment.key,
                         result,
                     },
@@ -291,6 +296,7 @@ fn run(
                     emit(
                         shared,
                         Response {
+                            provisional: request.provisional,
                             key: request.segment.key,
                             result: Err(error.to_string()),
                         },

@@ -2,6 +2,8 @@
 #![deny(missing_docs)]
 
 mod cloud;
+/// Explicit model discovery for supported cloud speech protocols.
+pub mod discovery;
 mod local;
 pub use local::{ModelKind, ModelMetadata, WhisperEngine, WhisperResult, model_metadata};
 mod mock;
@@ -38,9 +40,11 @@ pub struct ProviderTranslation {
     pub is_final: bool,
 }
 
-/// Per-session settings; credentials are never retained here.
+/// Per-session settings; credential values are redacted from Debug.
 #[derive(Clone, Debug)]
 pub struct Config {
+    /// Explicit GUI settings; None retains environment compatibility for CLI diagnostics.
+    pub services: Option<subveil_core::services::ServiceSettings>,
     /// Chosen backend.
     pub provider: Provider,
     /// User-selected streaming model manifest; never downloaded automatically.
@@ -63,6 +67,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            services: None,
             provider: Provider::Mock,
             local_model: None,
             local_compute: subveil_core::inference::Compute::Cpu,
@@ -76,6 +81,35 @@ impl Default for Config {
     }
 }
 impl Config {
+    /// Resolve explicit settings, falling back to environment only for CLI callers.
+    pub fn setting(&self, name: &str) -> anyhow::Result<String> {
+        match &self.services {
+            Some(settings) => settings.get(name).map_err(Into::into),
+            None => providers::env(name),
+        }
+    }
+    /// Configured upload hostname without credentials.
+    pub fn destination(&self) -> String {
+        let name = match self.provider {
+            Provider::AzureOpenAi => "AZURE_OPENAI_ENDPOINT",
+            Provider::CustomOpenAi => "CUSTOM_OPENAI_URL",
+            Provider::CustomDashScope => "CUSTOM_DASHSCOPE_URL",
+            _ => return self.provider.destination(),
+        };
+        self.setting(name)
+            .ok()
+            .and_then(|raw| url::Url::parse(&raw).ok())
+            .and_then(|url| url.host_str().map(str::to_owned))
+            .unwrap_or_else(|| "待配置端点".into())
+    }
+    /// Explicit model override or protocol default.
+    pub fn model(&self, default: &str) -> String {
+        self.services
+            .as_ref()
+            .and_then(|s| s.optional(&format!("{}_MODEL", self.provider.id())))
+            .unwrap_or_else(|| default.into())
+    }
+
     /// Validate settings and backend availability before capture starts.
     pub fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
@@ -118,7 +152,15 @@ impl Config {
                 self.allow_cloud,
                 "cloud audio upload requires explicit opt-in"
             );
-            self.provider.validate()?;
+            self.provider.validate_using(|name| self.setting(name))?;
+            if let Some(settings) = &self.services
+                && let Some(model) = settings.optional(&format!("{}_MODEL", self.provider.id()))
+            {
+                anyhow::ensure!(
+                    discovery::defaults(self.provider).contains(&model),
+                    "模型与当前语音协议不兼容；请重新选择"
+                );
+            }
         }
         Ok(())
     }

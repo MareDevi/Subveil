@@ -133,7 +133,10 @@ impl Provider {
                 .unwrap_or_else(|| "待配置自定义端点".into()),
         }
     }
-    pub(crate) fn validate(self) -> anyhow::Result<()> {
+    pub(crate) fn validate_using(
+        self,
+        env: impl Fn(&str) -> anyhow::Result<String>,
+    ) -> anyhow::Result<()> {
         let names: &[&str] = match self {
             Self::Mock | Self::Local => &[],
             Self::Deepgram => &["DEEPGRAM_API_KEY"],
@@ -175,10 +178,14 @@ impl Provider {
                 );
             }
             Self::AzureOpenAi => {
-                azure_endpoint()?;
+                azure_url(&env("AZURE_OPENAI_ENDPOINT")?)?;
             }
             Self::CustomDashScope | Self::CustomOpenAi => {
-                custom_endpoint(self)?;
+                endpoint(&env(if self == Self::CustomDashScope {
+                    "CUSTOM_DASHSCOPE_URL"
+                } else {
+                    "CUSTOM_OPENAI_URL"
+                })?)?;
             }
             Self::Tencent => {
                 ensure!(

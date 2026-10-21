@@ -10,16 +10,6 @@ use tokio_tungstenite::{
     tungstenite::{Message, client::IntoClientRequest, protocol::WebSocketConfig},
 };
 
-pub(crate) fn credential() -> anyhow::Result<String> {
-    let key = std::env::var("DEEPGRAM_API_KEY")
-        .map_err(|_| anyhow::anyhow!("请通过 DEEPGRAM_API_KEY 配置云端凭据"))?;
-    ensure!(
-        !key.trim().is_empty() && key.len() <= 4_096 && !key.contains(['\r', '\n']),
-        "DEEPGRAM_API_KEY 无效"
-    );
-    Ok(key)
-}
-
 pub(crate) fn run(
     config: &Config,
     session: u64,
@@ -76,11 +66,14 @@ async fn connected(
     transcript: &mut Transcript,
 ) -> anyhow::Result<()> {
     let url = format!(
-        "wss://api.deepgram.com/v1/listen?model=nova-3&language={}&encoding=linear16&sample_rate={}&channels=1&interim_results=true&endpointing={}&smart_format=true",
-        config.language, config.sample_rate, config.vad.trailing_silence_ms
+        "wss://api.deepgram.com/v1/listen?model={}&language={}&encoding=linear16&sample_rate={}&channels=1&interim_results=true&endpointing={}&smart_format=true",
+        config.model("nova-3"),
+        config.language,
+        config.sample_rate,
+        config.vad.trailing_silence_ms
     );
     let mut request = url.into_client_request()?;
-    let mut auth = format!("Token {}", credential()?)
+    let mut auth = format!("Token {}", config.setting("DEEPGRAM_API_KEY")?)
         .parse::<tokio_tungstenite::tungstenite::http::HeaderValue>()
         .map_err(|_| anyhow::anyhow!("云端凭据格式无效"))?;
     auth.set_sensitive(true);

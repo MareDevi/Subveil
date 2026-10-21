@@ -27,6 +27,11 @@ impl ControlView {
                 cx,
             ))
             .child(self.render_local_translation(cx))
+            .child(section("研究候选", "以下尚未接入，不能安装或启动；与已支持的模型分开展示。", cx))
+            .child(help("Fujie Japanese Streaming Zipformer：原生 RNN-T，320 ms 块；输出假名与标记。CC BY 4.0；本轮下载元数据返回 401，未实测。", cx))
+            .child(Link::new("candidate-ja-zipformer").href("https://huggingface.co/fujie/sherpa_onnx_asr_csj_cejc_pron_comp_zipformer_stream_c320_la0").child("日语流式模型卡"))
+            .child(help("Vosk：连续识别，需新增运行时与质量对照。NeMo Streaming FastConformer：需缓存式运行时。Qwen3-ASR：须按具体实现验证缓存复用。", cx))
+            .child(help("HY-MT1.5、MarianMT / OPUS-MT、NLLB、M2M100：需专用运行时或提示词适配，不等于原生同时翻译。SeamlessStreaming：端到端研究项，CC BY-NC 4.0，不作为默认后端。", cx))
             .child(
                 button(
                     "save-model-settings",
@@ -73,6 +78,21 @@ impl ControlView {
                 "翻译支持 CPU / Vulkan；Whisper 可选 CPU / CUDA。切换设备前请停止识别。",
                 cx,
             ));
+        view = view.child(
+            button(
+                "choose-translation-model",
+                format!(
+                    "翻译模型：{}",
+                    models
+                        .current()
+                        .map(|m| m.name.as_str())
+                        .unwrap_or("暂无模型")
+                ),
+                &self.session,
+                Session::cycle_translation_model,
+            )
+            .disabled(busy),
+        );
         if let Some(model) = models.current() {
             view = view
                 .child(help(

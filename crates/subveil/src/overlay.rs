@@ -32,23 +32,23 @@ impl Render for OverlayView {
         let mut root = div().size_full().flex().flex_col().justify_end();
         for subtitle in session.subtitles.visible() {
             let translation = match &subtitle.translation {
-                TranslationState::Complete(text) | TranslationState::Streaming(text) => {
-                    text.as_str()
+                TranslationState::Complete(text) => text.clone(),
+                TranslationState::Streaming(text) | TranslationState::PendingWithPreview(text) => {
+                    format!("{text}（临时译文）")
                 }
-                TranslationState::Pending => "正在生成译文…",
-                TranslationState::Failed(_) => "翻译失败",
-                TranslationState::NotRequested => {
-                    if subtitle.is_final {
-                        ""
-                    } else {
-                        "正在识别…"
-                    }
+                TranslationState::Pending => "正在生成译文…".into(),
+                TranslationState::Failed(_) => "翻译失败".into(),
+                TranslationState::NotRequested => if subtitle.is_final {
+                    ""
+                } else {
+                    "正在识别…"
                 }
+                .into(),
             };
             root = root.child(subtitle_panel(
                 settings,
                 &subtitle.transcript.text,
-                translation,
+                &translation,
                 cx,
             ));
         }

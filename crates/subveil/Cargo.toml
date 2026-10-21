@@ -17,6 +17,7 @@ subveil-audio = { path = "../subveil-audio" }
 subveil-translate = { path = "../subveil-translate" }
 serde.workspace = true
 toml.workspace = true
+tokio = { version = "1", features = ["rt", "time", "net"] }
 
 [lints]
 workspace = true

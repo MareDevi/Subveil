@@ -22,8 +22,10 @@ impl ControlView {
                 .child(div().text_lg().child(subtitle.transcript.text.clone()))
                 .child(
                     div().text_xl().child(match &subtitle.translation {
-                        TranslationState::Complete(text) | TranslationState::Streaming(text) => {
-                            text.clone()
+                        TranslationState::Complete(text) => text.clone(),
+                        TranslationState::Streaming(text)
+                        | TranslationState::PendingWithPreview(text) => {
+                            format!("{text}（临时译文）")
                         }
                         TranslationState::Pending => "正在生成译文…".into(),
                         TranslationState::Failed(error) => format!("翻译失败：{error}"),
@@ -66,8 +68,11 @@ impl ControlView {
                     .child(entry.transcript.text.clone())
                     .child(div().pt_1().text_color(cx.theme().muted_foreground).child(
                         match &entry.translation {
-                            TranslationState::Complete(text)
-                            | TranslationState::Streaming(text) => text.clone(),
+                            TranslationState::Complete(text) => text.clone(),
+                            TranslationState::Streaming(text)
+                            | TranslationState::PendingWithPreview(text) => {
+                                format!("{text}（临时译文）")
+                            }
                             TranslationState::Pending => "正在生成译文…".into(),
                             TranslationState::Failed(error) => format!("翻译失败：{error}"),
                             TranslationState::NotRequested => "暂无译文".into(),

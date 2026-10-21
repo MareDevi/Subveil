@@ -15,6 +15,7 @@ pub struct LocalPreferences {
     pub language: String,
     pub target: String,
     pub offline: bool,
+    pub incremental_translation: bool,
     pub gpu_name: Option<String>,
     pub asr_cuda: bool,
     pub whisper_block_ms: Option<u32>,
@@ -133,6 +134,7 @@ mod tests {
             language: "ja".into(),
             target: "zh".into(),
             offline: true,
+            incremental_translation: true,
             gpu_name: Some("Vulkan · test GPU".into()),
             asr_cuda: true,
             whisper_block_ms: Some(2000),
@@ -140,6 +142,7 @@ mod tests {
         save_local(&path, &preferences)?;
         let restored = load_local(&path)?;
         assert!(restored.offline);
+        assert!(restored.incremental_translation);
         assert_eq!(restored.gpu_name, preferences.gpu_name);
         assert_eq!(restored.translation_model, preferences.translation_model);
         assert!(restored.asr_cuda);

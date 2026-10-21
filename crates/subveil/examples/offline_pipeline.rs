@@ -12,8 +12,8 @@ use subveil_translate::{Compute, Request, Translation};
 fn main() -> anyhow::Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     ensure!(
-        (5..=7).contains(&args.len()),
-        "usage: offline_pipeline ASR_MANIFEST TRANSLATION_MANIFEST WAV LANGUAGE cpu|gpu [--asr-cuda] [--system]"
+        (5..=8).contains(&args.len()),
+        "usage: offline_pipeline ASR_MANIFEST TRANSLATION_MANIFEST WAV LANGUAGE cpu|gpu [--asr-cuda] [--system] [--incremental]"
     );
     let metadata = subveil_asr::model_metadata(std::path::Path::new(&args[0]))?;
     let compute = match args[4].as_str() {
@@ -40,11 +40,12 @@ fn main() -> anyhow::Result<()> {
         thread::sleep(Duration::from_millis(10));
     }
     let system = args[5..].iter().any(|argument| argument == "--system");
+    let incremental = args[5..].iter().any(|argument| argument == "--incremental");
     let asr_cuda = args[5..].iter().any(|argument| argument == "--asr-cuda");
     ensure!(
         args[5..]
             .iter()
-            .all(|a| matches!(a.as_str(), "--system" | "--asr-cuda")),
+            .all(|a| matches!(a.as_str(), "--system" | "--asr-cuda" | "--incremental")),
         "unknown option"
     );
     ensure!(
@@ -126,16 +127,35 @@ fn main() -> anyhow::Result<()> {
     let mut finals = 0;
     let mut translated = 0;
     let mut pending = 0;
+    let mut scheduler = subveil_translate::StreamingTranslationScheduler::default();
+    let mut provisional_submitted = 0;
+    let mut provisional_applied = 0;
+    let mut provisional_rejected = 0;
+    let mut provisional_failed = 0;
+    let mut first_partial_ms = None;
+    let mut first_provisional_ms = None;
     let mut drain = |subtitles: &mut SubtitleState| -> anyhow::Result<()> {
         ensure!(!recognition.is_finished(), "ASR exited");
         while let Some(event) = recognition.pop() {
+            let partial = match &event {
+                TranscriptEvent::Partial(source) => Some(source.clone()),
+                _ => None,
+            };
             let segment = match &event {
                 TranscriptEvent::Final(segment) => Some(segment.clone()),
                 _ => None,
             };
-            if subtitles.apply(event, started.elapsed().as_millis() as u64)
-                && let Some(segment) = segment
+            let now_ms = started.elapsed().as_millis() as u64;
+            let accepted = subtitles.apply(event, now_ms);
+            if incremental
+                && accepted
+                && let Some(source) = partial
             {
+                first_partial_ms.get_or_insert(now_ms);
+                scheduler.observe(&source, now_ms);
+            }
+            if accepted && let Some(segment) = segment {
+                scheduler.reset();
                 finals += 1;
                 first_start_ms.get_or_insert(segment.start_ms);
                 first_source_ms.get_or_insert(started.elapsed().as_millis() as u64);
@@ -154,7 +174,42 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        let now_ms = started.elapsed().as_millis() as u64;
+        if incremental
+            && let Some(entry) = subtitles.history().back()
+            && !entry.is_final
+            && !entry.expired
+            && let Some(source) = scheduler.poll(&entry.transcript, now_ms)
+            && subtitles.request_stable_prefix_translation(source.key, &source.text)
+        {
+            let mut request = Request::new(source, "zh".into());
+            request.provisional = true;
+            request.deadline = Instant::now() + Duration::from_secs(25);
+            translation.submit(request);
+            provisional_submitted += 1;
+        }
         while let Some(response) = translation.pop() {
+            if response.provisional {
+                let chinese = response
+                    .result
+                    .as_ref()
+                    .is_ok_and(|text| text.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)));
+                if subtitles.finish_provisional_translation(
+                    response.key,
+                    response.result,
+                    started.elapsed().as_millis() as u64,
+                ) {
+                    if chinese {
+                        provisional_applied += 1;
+                        first_provisional_ms.get_or_insert(started.elapsed().as_millis() as u64);
+                    } else {
+                        provisional_failed += 1;
+                    }
+                } else {
+                    provisional_rejected += 1;
+                }
+                continue;
+            }
             let result = response.result.map_err(anyhow::Error::msg)?;
             ensure!(
                 result
@@ -247,6 +302,9 @@ fn main() -> anyhow::Result<()> {
     println!(
         "Offline pipeline: system_capture={system} finals={finals} translated={translated} pending={pending} elapsed_ms={}",
         started.elapsed().as_millis()
+    );
+    println!(
+        "Incremental: enabled={incremental} submitted={provisional_submitted} applied={provisional_applied} rejected={provisional_rejected} failed={provisional_failed} first_partial_ms={first_partial_ms:?} first_provisional_ms={first_provisional_ms:?}"
     );
     end_lags.sort_unstable();
     println!(

@@ -2,11 +2,13 @@ mod appearance;
 mod diagnostics;
 mod live;
 mod model_library;
+mod service_fields;
 mod services;
 
 use gpui_kit::component::{
     ActiveTheme, Disableable, Icon, IconName, IndexPath, Root, Sizable, Theme, ThemeMode,
     button::{Button, ButtonVariants},
+    input::{Input, InputContentType, InputEvent, InputState},
     link::Link,
     progress::Progress,
     radio::RadioGroup,
@@ -139,6 +141,12 @@ pub struct ControlView {
     sidebar_collapsed: bool,
     provider: Entity<SelectState<Vec<SharedString>>>,
     local_model: Entity<SelectState<Vec<SharedString>>>,
+    cloud_model: Entity<SelectState<Vec<SharedString>>>,
+    cloud_items: Vec<SharedString>,
+    cloud_text_model: Entity<SelectState<Vec<SharedString>>>,
+    cloud_text_items: Vec<SharedString>,
+    service_inputs: Vec<(&'static str, Entity<InputState>)>,
+    credentials_generation: u64,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -184,7 +192,164 @@ impl ControlView {
                 }
             }
         });
+        let mut service_inputs = Vec::new();
+        let mut input_subscriptions = Vec::new();
+        let schemas = subveil_asr::Provider::ALL
+            .into_iter()
+            .flat_map(service_fields::fields)
+            .chain(
+                [
+                    subveil_translate::Provider::OpenAi,
+                    subveil_translate::Provider::DeepL,
+                ]
+                .into_iter()
+                .flat_map(service_fields::translation_fields),
+            );
+        for spec in schemas {
+            let key = spec.key;
+            let value = session
+                .read(cx)
+                .asr_config
+                .services
+                .as_ref()
+                .and_then(|s| s.optional(key))
+                .unwrap_or_default();
+            let input = cx.new(|cx| InputState::new(window, cx).default_value(value));
+            let owner = session.clone();
+            input_subscriptions.push(cx.subscribe(&input, move |_, state, event, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let value = state.read(cx).value().to_string();
+                    owner.update(cx, |session, cx| {
+                        if session.asr_active() || session.credentials_busy || session.cloud_busy {
+                            return;
+                        }
+                        session
+                            .asr_config
+                            .services
+                            .get_or_insert_default()
+                            .set(key, value);
+                        session.allow_text_upload = false;
+                        session.cloud_models =
+                            subveil_asr::discovery::defaults(session.asr_config.provider);
+                        if matches!(key, "SUBVEIL_TRANSLATE_URL" | "SUBVEIL_TRANSLATE_KEY") {
+                            session.cloud_text_models.clear();
+                        }
+                        session.cloud_status = "官方协议默认项；凭据变更后请重新查询".into();
+                        session.credentials_status =
+                            "配置已修改，仅保留在内存；上传仍需单独授权".into();
+                        cx.notify();
+                    });
+                }
+            }));
+            service_inputs.push((key, input));
+        }
+        let cloud_items = session
+            .read(cx)
+            .cloud_models
+            .iter()
+            .cloned()
+            .map(SharedString::from)
+            .collect::<Vec<_>>();
+        let cloud_model = cx.new(|cx| SelectState::new(cloud_items.clone(), None, window, cx));
+        let cloud_owner = session.clone();
+        let cloud_selected = cx.subscribe(&cloud_model, move |_, _, event, cx| {
+            if let SelectEvent::Confirm(Some(model)) = event {
+                cloud_owner.update(cx, |session, cx| {
+                    if !session.asr_active()
+                        && !session.cloud_busy
+                        && session.cloud_models.iter().any(|id| id == model.as_ref())
+                    {
+                        let key = format!("{}_MODEL", session.asr_config.provider.id());
+                        session
+                            .asr_config
+                            .services
+                            .get_or_insert_default()
+                            .set(&key, model.to_string());
+                        cx.notify();
+                    }
+                });
+            }
+        });
+        let cloud_text_items = session
+            .read(cx)
+            .cloud_text_models
+            .iter()
+            .cloned()
+            .map(SharedString::from)
+            .collect::<Vec<_>>();
+        let cloud_text_model =
+            cx.new(|cx| SelectState::new(cloud_text_items.clone(), None, window, cx));
+        let text_owner = session.clone();
+        let text_selected = cx.subscribe_in(
+            &cloud_text_model,
+            window,
+            move |this, _, event, window, cx| {
+                if let SelectEvent::Confirm(Some(model)) = event {
+                    if text_owner.read(cx).asr_active() {
+                        return;
+                    }
+                    if let Some((_, input)) = this
+                        .service_inputs
+                        .iter()
+                        .find(|(key, _)| *key == "SUBVEIL_TRANSLATE_MODEL")
+                    {
+                        input.update(cx, |s, cx| s.set_value(model.to_string(), window, cx));
+                    }
+                }
+            },
+        );
         let observed = cx.observe_in(&session, window, |this, session, window, cx| {
+            let text_items = session
+                .read(cx)
+                .cloud_text_models
+                .iter()
+                .cloned()
+                .map(SharedString::from)
+                .collect::<Vec<_>>();
+            if text_items != this.cloud_text_items {
+                this.cloud_text_items = text_items.clone();
+                this.cloud_text_model
+                    .update(cx, |s, cx| s.set_items(text_items, window, cx));
+            }
+
+            let generation = session.read(cx).credentials_generation;
+            let config = session.read(cx).asr_config.clone();
+            let items = session
+                .read(cx)
+                .cloud_models
+                .iter()
+                .cloned()
+                .map(SharedString::from)
+                .collect::<Vec<_>>();
+            if items != this.cloud_items {
+                this.cloud_items = items.clone();
+                this.cloud_model
+                    .update(cx, |s, cx| s.set_items(items, window, cx));
+            }
+            let selected = SharedString::from(
+                config.model(
+                    this.cloud_items
+                        .first()
+                        .map(|s| s.as_ref())
+                        .unwrap_or_default(),
+                ),
+            );
+            if this.cloud_model.read(cx).selected_value() != Some(&selected) {
+                this.cloud_model
+                    .update(cx, |s, cx| s.set_selected_value(&selected, window, cx));
+            }
+            if generation != this.credentials_generation {
+                this.credentials_generation = generation;
+                for (key, input) in &this.service_inputs {
+                    let value = config
+                        .services
+                        .as_ref()
+                        .and_then(|s| s.optional(key))
+                        .unwrap_or_default();
+                    input.update(cx, |s, cx| s.set_value(value, window, cx));
+                }
+            }
+
             let value = SharedString::from(session.read(cx).asr_config.provider.name());
             if this.provider.read(cx).selected_value() != Some(&value) {
                 this.provider
@@ -211,6 +376,14 @@ impl ControlView {
         });
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
+        input_subscriptions.extend([
+            observed,
+            selected,
+            model_selected,
+            cloud_selected,
+            text_selected,
+        ]);
+        let credentials_generation = session.read(cx).credentials_generation;
         Self {
             session,
             page: if current == subveil_asr::Provider::Local {
@@ -223,7 +396,13 @@ impl ControlView {
             scroll: std::array::from_fn(|_| ScrollHandle::new()),
             provider,
             local_model,
-            _subscriptions: vec![observed, selected, model_selected],
+            cloud_model,
+            cloud_items,
+            cloud_text_model,
+            cloud_text_items,
+            service_inputs,
+            credentials_generation,
+            _subscriptions: input_subscriptions,
         }
     }
 

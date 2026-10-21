@@ -1,3 +1,4 @@
+mod credentials;
 mod mock;
 mod models;
 mod overlay;

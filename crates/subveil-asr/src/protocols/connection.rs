@@ -1,6 +1,6 @@
 use crate::{
     Config, Provider,
-    providers::{azure_url, endpoint, env},
+    providers::{azure_url, endpoint},
 };
 use anyhow::ensure;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -28,7 +28,7 @@ fn header(request: &mut Request<()>, name: &'static str, value: String) -> anyho
     Ok(())
 }
 pub(super) fn prepare(config: &Config) -> anyhow::Result<Connection> {
-    prepare_using(config, env)
+    prepare_using(config, |name| config.setting(name))
 }
 fn prepare_using(
     config: &Config,
@@ -39,8 +39,9 @@ fn prepare_using(
     let (url, init, wait_created, chunk_ms) = match p {
         Provider::Alibaba => {
             let url = format!(
-                "wss://{}.cn-beijing.maas.aliyuncs.com/api-ws/v1/realtime?model=qwen3.8-livetranslate-flash-realtime",
-                env("DASHSCOPE_WORKSPACE_ID")?
+                "wss://{}.cn-beijing.maas.aliyuncs.com/api-ws/v1/realtime?model={}",
+                env("DASHSCOPE_WORKSPACE_ID")?,
+                config.model("qwen3.8-livetranslate-flash-realtime")
             );
             let settings = json!({
                 "type": "session.update",
@@ -50,7 +51,7 @@ fn prepare_using(
         }
         Provider::Gemini => {
             let settings = json!({"setup": {
-                "model": "models/gemini-3.5-live-translate-preview",
+                "model": format!("models/{}", config.model("gemini-3.5-live-translate-preview")),
                 "generationConfig": {
                     "responseModalities": ["AUDIO"],
                     "inputAudioTranscription": {}, "outputAudioTranscription": {},
@@ -88,7 +89,7 @@ fn prepare_using(
                 url
             };
             let model = if p == Provider::OpenAi {
-                "gpt-realtime-translate".into()
+                config.model("gpt-realtime-translate")
             } else {
                 env("AZURE_OPENAI_DEPLOYMENT")?
             };
@@ -242,7 +243,7 @@ fn tencent_url(
         ("source", config.language.clone()),
         ("target", config.target_language.clone()),
         ("timestamp", now.to_string()),
-        ("trans_model", "hunyuan-translation-lite".into()),
+        ("trans_model", config.model("hunyuan-translation-lite")),
         ("voice_format", "1".into()),
         ("voice_id", id.into()),
     ]);
@@ -360,6 +361,62 @@ mod initialization_tests {
             _ => "test-credential",
         }
         .into())
+    }
+    #[test]
+    fn explicit_gui_credentials_build_connections_without_environment_mutation()
+    -> anyhow::Result<()> {
+        for provider in Provider::ALL
+            .into_iter()
+            .filter(|p| p.is_cloud() && *p != Provider::Deepgram)
+        {
+            let mut settings = subveil_core::services::ServiceSettings::default();
+            let names = [
+                "DASHSCOPE_WORKSPACE_ID",
+                "DASHSCOPE_API_KEY",
+                "GEMINI_API_KEY",
+                "VOLCENGINE_API_KEY",
+                "TENCENT_APP_ID",
+                "TENCENT_SECRET_ID",
+                "TENCENT_SECRET_KEY",
+                "BAIDU_APP_ID",
+                "BAIDU_API_KEY",
+                "OPENAI_API_KEY",
+                "AZURE_OPENAI_ENDPOINT",
+                "AZURE_OPENAI_API_KEY",
+                "AZURE_OPENAI_DEPLOYMENT",
+                "AZURE_OPENAI_TRANSCRIPTION_DEPLOYMENT",
+                "XAI_API_KEY",
+                "CUSTOM_DASHSCOPE_URL",
+                "CUSTOM_DASHSCOPE_MODEL",
+                "CUSTOM_DASHSCOPE_API_KEY",
+                "CUSTOM_OPENAI_URL",
+                "CUSTOM_OPENAI_MODEL",
+                "CUSTOM_OPENAI_API_KEY",
+            ];
+            for name in names {
+                settings.set(name, credential(name)?);
+            }
+            let config = Config {
+                provider,
+                services: Some(settings),
+                allow_cloud: true,
+                sample_rate: provider.required_rate().unwrap_or(16_000),
+                ..Default::default()
+            };
+            config.validate()?;
+            let connection = prepare(&config)?;
+            assert!(connection.request.uri().host().is_some());
+            assert!(!format!("{config:?}").contains("test-credential"));
+        }
+        let config = Config {
+            provider: Provider::OpenAi,
+            services: Some(Default::default()),
+            allow_cloud: true,
+            sample_rate: 24_000,
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+        Ok(())
     }
     #[test]
     fn every_cloud_initializer_builds_without_devices_real_keys_or_network() -> anyhow::Result<()> {

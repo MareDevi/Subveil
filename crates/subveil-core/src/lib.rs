@@ -5,3 +5,5 @@
 pub mod config;
 pub mod inference;
 pub mod subtitle;
+
+pub mod services;
