@@ -1,5 +1,18 @@
 # M00 技术调研
 
+## M05 追加：原生翻译与 GPU（2026-10-21）
+
+- Context7 resolve/query 后核对 llama-cpp-2 0.1.160 与实际 Cargo 源码：`LlamaBackend::init`、`list_llama_ggml_backend_devices`、`LlamaModelParams::with_devices/with_n_gpu_layers`、`LlamaModel::chat_template/apply_chat_template`、`LlamaVocab::tokenize/is_eog/token_to_piece`。主线旧示例中的 `model.str_to_token`、`model.is_eog_token` 不适用于当前发布版；使用实际 vocab API。
+- Vulkan 原生构建需要 CMake、Clang、Vulkan headers/loader、glslc；Arch 的 shaderc 包提供 glslc，CI Ubuntu 显式安装 glslc。不改系统驱动或用户 Vulkan 配置。
+- GPU 枚举和模型加载都来自 llama 原生设备 API，不将 nvidia-smi 结果当作 GPU 推理证明。使用显式设备索引和 1000 层卸载上限，小模型全部可卸载层交由所选 GPU；CPU 明确设置 0 层及空设备列表。加载前检查模型大小加 512 MiB 的可用显存估计，实际分配失败仍返回错误。算子可能由运行库在 CPU/GPU 间分配，不宣称每个算子均在 GPU。
+- 同进程链接 sherpa 预编译静态库与 GCC 16 编译的 llama 时，在进入 main 前发生 `std::bad_alloc`；GDB 栈落在 `INVALID_RULE_CHARS_RE` 的 C++ regex 初始化。最终隔离为独立 Rust 推理程序，未修改 sherpa、GPUI 或系统工具链。主程序启动后原生探测、CPU/GPU 翻译均恢复正常。
+- IPC 使用 stdin/stdout JSON 行，单条最多 64 KiB，结果带请求编号，父进程再关联 Session/Segment/revision。专用读取线程加容量 1 的通道；推理等待每 10 ms 检查取消及截止时间，故障终止子进程并明确失败。原文不作为命令行参数、临时文件或日志传递，子进程 stderr 不转存。
+- 模型权重与上下文归子进程，停止后终止并回收。模型加载最长 30 秒，GUI 等待翻译模型准备后再打开采集，避免加载期间产生待翻译音频积压。GPU 失败不自动改用 CPU；本地翻译失败时原文识别可以继续，并显示错误。
+- 本地翻译每句单独使用模型内置 chat template，最多 1536 输入 token、256 输出 token、2048 上下文；不沿用云端三句上下文。超限明确失败，不显示截断译文。文本模型目录的采样率标记为 0，表示不接收音频，不能用于 ASR。
+- sherpa 继续采用 1.13.8 CPU 静态库；其 CUDA provider 源码在编译能力不足时可能回退 CPU，本轮未包装成虚假的 CUDA 选项。GPU 支持范围为 Qwen 本地文字翻译。
+
+来源：<https://docs.rs/llama-cpp-2/0.1.160/llama_cpp_2/>，<https://github.com/utilityai/llama-cpp-rs>，<https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.8/sherpa-onnx/csrc/session.cc>。验收见 `docs/m05-validation.md`。
+
 调研日期：2026-10-20。先查询 Context7，再核对已发布 crate 与官方源码；主线文档可能领先或落后于发布包。
 
 ## 结论与版本

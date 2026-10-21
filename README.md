@@ -2,7 +2,7 @@
 
 Rust + GPUI 原生跨平台实时字幕翻译应用，优先支持 Linux / Wayland / PipeWire。
 
-当前开发 **M04：本地 ASR 与实时翻译**。支持应用内选择、下载并运行三种本地 ASR 模型（英文/中英 streaming、SenseVoice 日英中分段），保留手动导入、本地 CPU 识别，以及独立 OpenAI-compatible / DeepL 文字翻译。保留 M03 云端服务及接口自带译文。默认不上传音频或文本；两种上传分别授权。三种模型已在本机下载校验，公开日语/英语/中文 WAV 推理通过；真实云端翻译质量与完整 GUI 交互仍待验收。配置见 [本地 ASR 与文字翻译](docs/local-asr-and-translation.md)。
+当前阶段 **M05：本地模型与离线字幕**。应用内安装并校验语音识别及文字翻译模型；CPU 识别配合 Qwen 本地翻译，翻译可选择 CPU 或 Vulkan GPU。支持完全离线模式、模型导入、磁盘空间检查、进度与取消、停止卸载和本地设置保存。真实日英离线链路与 RTX 4060 翻译已验证，长时稳定性及完整 GUI 交互仍待验收。云端语音与文字服务继续保留，分别授权上传。入门见 [M05 使用与验收](docs/m05-validation.md)。
 
 ## 开发环境
 
@@ -13,7 +13,7 @@ Arch Linux / CachyOS 原生依赖示例（需自行确认系统包操作）：
 ```sh
 sudo pacman -S --needed base-devel pkgconf clang cmake fontconfig freetype2 \
   libxkbcommon libxkbcommon-x11 wayland libxcb openssl zstd vulkan-headers \
-  vulkan-icd-loader pipewire
+  vulkan-icd-loader shaderc pipewire
 ```
 
 安装适合 GPU 的 Vulkan 驱动和中文字体，例如 `noto-fonts-cjk`。音频采集需要运行中的 PipeWire 与提供默认输出 metadata 的会话管理器（本机验证为 WirePlumber）。
@@ -100,6 +100,9 @@ M01 使用屏幕布局中最左、其次最上方的输出，宽度与高度按�
 | `mise run demo` | 启动离线 mock 双语浮窗 |
 | `mise run models` | 打开本地模型目录 |
 | `mise run model:install -- --list` | 列出固定版本本地模型 |
+| `mise run translate:probe --devices` | 使用原生推理后端检测 GPU |
+| `mise run translate:probe MANIFEST cpu` | 固定日英文本的本地翻译诊断 |
+| `mise run offline:probe ASR_MANIFEST TRANSLATION_MANIFEST WAV ja gpu` | 完全离线字幕链路诊断 |
 | `mise run audio:probe -- 10 48000` | 无窗口音频统计诊断 |
 | `mise run asr:probe -- mock 10 en 16000` | 无窗口 ASR 诊断 |
 | `mise run asr:check` | 全部 ASR 目标构建、Clippy、测试 |
@@ -112,7 +115,7 @@ M01 使用屏幕布局中最左、其次最上方的输出，宽度与高度按�
 
 ## 工程与文档
 
-Workspace 包含 `subveil` 应用、`subveil-core` 核心状态、`subveil-audio` 音频适配器、`subveil-asr` 识别后端与 `subveil-translate` 文字翻译后端。核心状态和配置不依赖 GPUI，设备与付费 API 均不参与核心测试。GUI 统一依赖 GPUI Kit 0.8.0，通过 facade 使用 gpui-component 0.8.0 与 gpui-pre 0.3.9，保持一致的类型。
+Workspace 包含 `subveil` 应用、`subveil-core` 核心状态与推理协议、`subveil-audio` 音频适配器、`subveil-asr` 识别后端、`subveil-translate` 翻译调度、`subveil-models` 模型目录与下载器、`subveil-inference` 独立 GGUF 推理进程。安装时须将 `subveil` 与 `subveil-inference` 放在同一目录；`mise run build` 构建两者。核心状态和配置不依赖 GPUI，设备与付费 API 均不参与核心测试。GUI 统一依赖 GPUI Kit 0.8.0，通过 facade 使用 gpui-component 0.8.0 与 gpui-pre 0.3.9，保持一致的类型。
 
 - [开发规范](AGENTS.md)
 - [完整开发规划](docs/development-plan.md)
@@ -129,5 +132,7 @@ Workspace 包含 `subveil` 应用、`subveil-core` 核心状态、`subveil-audio
 - [M04 验收记录](docs/m04-validation.md)
 - [应用内模型库计划](docs/model-library-plan.md)
 - [模型选型与运行验收](docs/model-library-validation.md)
+- [M05 实施计划](docs/m05-plan.md)
+- [M05 使用与验收](docs/m05-validation.md)
 
 必须使用 Conventional Commits，按可审查的小步勤提交。项目许可证待所有者确认，尚未授予开源许可证。

@@ -8,7 +8,7 @@
 - Rust 1.99.1、原生系统依赖与 PipeWire 检查通过。磁盘剩余约 345 GiB。
 - 沙箱外只读查询确认 RTX 4060 Laptop、8188 MiB、驱动 615.78.08；沙箱内设备不可用。
 - 现有 sherpa-onnx 1.13.8 为 CPU 静态库。上游 CUDA 实现可能回退 CPU，因此不能仅设置 provider="cuda" 后宣称 GPU 可用。
-- Context7 查询 sherpa-onnx 与 utilityai/llama-cpp-rs，再核对发布源码。采用 llama-cpp-2 0.1.160 安全 Rust API，默认 Vulkan 后端，可显式选择 CPU。设备检测与模型加载均在后台执行；GPU 不可用则报错，不静默回退。
+- Context7 查询 sherpa-onnx 与 utilityai/llama-cpp-rs，再核对发布源码。采用 llama-cpp-2 0.1.160 安全 Rust API，默认编译 Vulkan 后端，运行设备由用户显式选择 CPU / GPU。设备检测与模型加载均在后台执行；GPU 不可用则报错，不静默回退。
 - 官方 Qwen/Qwen2.5-1.5B-Instruct-GGUF，固定 revision 91cad51170dc346986eccefdc2dd33a9da36ead9，Q4_K_M 权重约 1.12 GB，Apache-2.0。支持中英日文字翻译；生成质量须实测，不能以语言支持替代准确率结论。
 
 ## 实施清单
@@ -21,6 +21,8 @@
 6. mise run check、真实窗口运行、文档、审查提交并推送 origin/main。单次测试运行不超过 90 秒；长时稳定性不在本轮伪造验收。
 
 ## 来源
+
+实施中发现 sherpa 预编译静态库与本机 GCC 16 编译的 llama.cpp 在同一进程触发 `std::bad_alloc`。GDB 定位到 main 前的 C++ regex 静态初始化，而独立 llama 进程正常。最终将模型目录与校验拆为无推理运行库依赖的 `subveil-models`，使用独立 Rust `subveil-inference` 程序加载 GGUF；GPUI 进程不链接 llama。此变更同时提供可强制终止的取消与超时边界，保留 sherpa 与 GPUI 现有发布来源。
 
 - https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.8/rust-api-examples/for-advanced-users.md
 - https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.8/sherpa-onnx/csrc/session.cc
