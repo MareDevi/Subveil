@@ -132,6 +132,7 @@ Workspace 包含 `subveil` 应用、`subveil-core` 核心状态与推理协议�
 - [开发规范](AGENTS.md)
 - [完整开发规划](docs/development-plan.md)
 - [技术调研与架构限制](docs/technical-research.md)
+- [Subveil / Mimi / Sokuji 源码对比与改进建议](docs/competitive-code-review-2026-10-21.md)
 - [M00 验收记录](docs/m00-validation.md)
 - [M01 实施计划](docs/m01-plan.md)
 - [M01 验收记录](docs/m01-validation.md)
