@@ -5,6 +5,7 @@ mod installation;
 mod mock;
 mod models;
 mod overlay;
+mod presentation;
 mod session;
 mod storage;
 mod ui;

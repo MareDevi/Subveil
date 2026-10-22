@@ -3,6 +3,7 @@ use super::*;
 impl ControlView {
     pub(super) fn render_diagnostics(&self, cx: &App) -> gpui_kit::Div {
         let session = self.session.read(cx);
+        let (source_paint, translation_paint) = session.presentation.summaries();
         column()
             .child(heading(
                 "运行诊断",
@@ -135,6 +136,9 @@ impl ControlView {
                 ),
                 cx,
             ))
+            .child(section("状态接收到浮窗绘制", "本会话修订级计时；最近 256 次绘制回调。仅 GPUI paint，不包含 compositor、显示器扫描或实际阅读时间。隐藏浮窗、隐藏语种、过载修订会没有绘制样本。", cx))
+            .child(field("原文绘制", help(source_paint, cx), cx))
+            .child(field("译文绘制", help(translation_paint, cx), cx))
             .child(field(
                 "样式文件",
                 help(

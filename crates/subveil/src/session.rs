@@ -67,6 +67,7 @@ pub struct Session {
     pub local_models: crate::models::LocalModels,
     pub model_filter: crate::models::Filter,
     pub vad_models: crate::models::LocalModels,
+    pub presentation: crate::presentation::Probe,
     pub translation_models: crate::models::LocalModels,
     pub translation_model: Option<PathBuf>,
     pub compute: subveil_translate::Compute,
@@ -407,6 +408,7 @@ impl Session {
             model_info: "尚未选择本地模型".into(),
             local_models: crate::models::LocalModels::new(),
             vad_models: crate::models::LocalModels::vad(),
+            presentation: crate::presentation::Probe::default(),
             translation_models: crate::models::LocalModels::for_translation(true),
             translation_model: None,
             compute: subveil_translate::Compute::Cpu,
@@ -531,7 +533,12 @@ impl Session {
                         }
                         _ => None,
                     };
+                    let key = match &event {
+                        subveil_core::subtitle::TranscriptEvent::Partial(s)
+                        | subveil_core::subtitle::TranscriptEvent::Final(s) => s.key,
+                    };
                     if self.subtitles.apply(event, now_ms) {
+                        self.presentation.source(key, Instant::now());
                         changed = true;
                         if self.incremental_translation
                             && let Some(segment) = partial_segment
@@ -568,12 +575,17 @@ impl Session {
                     break;
                 };
                 if !self.asr_stopping {
-                    changed |= self.subtitles.apply_provider_translation(
+                    let accepted = self.subtitles.apply_provider_translation(
                         translation.key,
                         translation.text,
                         translation.is_final,
                         now_ms,
                     );
+                    if accepted {
+                        self.presentation
+                            .translation(translation.key, Instant::now());
+                    }
+                    changed |= accepted;
                 }
             }
             if recognition.is_finished() {
@@ -633,7 +645,8 @@ impl Session {
                     if let Err(error) = &response.result {
                         self.translation_status = error.clone();
                     }
-                    changed |= if response.provisional {
+                    let successful = response.result.is_ok();
+                    let accepted = if response.provisional {
                         self.subtitles.finish_provisional_translation(
                             response.key,
                             response.result,
@@ -643,11 +656,29 @@ impl Session {
                         self.subtitles
                             .finish_translation(response.key, response.result, now_ms)
                     };
+                    if accepted && successful {
+                        self.presentation.translation(response.key, Instant::now());
+                    }
+                    changed |= accepted;
                 }
             }
         }
         if self.running && now >= self.next_tick {
-            changed |= mock::advance(&mut self.subtitles, self.tick, now_ms);
+            let accepted = mock::advance(&mut self.subtitles, self.tick, now_ms);
+            if accepted && let Some(row) = self.subtitles.current() {
+                if self.tick % 56 != 12 {
+                    self.presentation.source(row.transcript.key, Instant::now());
+                }
+                if matches!(
+                    row.translation,
+                    subveil_core::subtitle::TranslationState::Complete(_)
+                        | subveil_core::subtitle::TranslationState::Streaming(_)
+                ) {
+                    self.presentation
+                        .translation(row.transcript.key, Instant::now());
+                }
+            }
+            changed |= accepted;
             self.tick = self.tick.saturating_add(1);
             self.next_tick = now + Duration::from_millis(250);
         }
@@ -665,6 +696,7 @@ impl Session {
         }
         self.subtitles
             .reset(self.subtitles.session_id().saturating_add(1));
+        self.presentation.reset();
         self.started = Instant::now();
         self.next_tick = Instant::now();
         self.tick = 0;
@@ -1062,6 +1094,7 @@ impl Session {
                 self.running = false;
                 self.subtitles.reset(id);
                 self.streaming_scheduler.reset();
+                self.presentation.reset();
                 self.started = Instant::now();
                 self.audio_capture = capture;
                 self.recognition = recognition;

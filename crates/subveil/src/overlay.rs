@@ -55,7 +55,36 @@ impl Render for OverlayView {
                 })
                 .collect::<Vec<String>>()
                 .join(" ");
-            root = root.child(subtitle_panel(settings, &source, &translation, cx));
+            let markers: Vec<_> = group
+                .iter()
+                .filter_map(|row| {
+                    session.presentation.marker(
+                        row.transcript.key,
+                        settings.display_mode != DisplayMode::Translation,
+                        settings.display_mode != DisplayMode::Source,
+                    )
+                })
+                .collect();
+            let probe = session.presentation.clone();
+            root = root.child(
+                subtitle_panel(settings, &source, &translation, cx)
+                    .relative()
+                    .child(
+                        gpui_kit::canvas(
+                            |_, _, _| (),
+                            move |bounds, _, _, _| {
+                                if bounds.size.width > px(0.) && bounds.size.height > px(0.) {
+                                    let now = std::time::Instant::now();
+                                    for marker in markers {
+                                        probe.paint(marker, now);
+                                    }
+                                }
+                            },
+                        )
+                        .absolute()
+                        .size_full(),
+                    ),
+            );
         }
         root
     }
@@ -215,4 +244,56 @@ pub fn open(
     _: &mut App,
 ) -> anyhow::Result<WindowHandle<OverlayView>> {
     anyhow::bail!("M01 字幕浮窗仅支持 Linux Wayland；当前平台尚未实现")
+}
+
+#[cfg(test)]
+mod paint_tests {
+    #![allow(clippy::expect_used)]
+    use super::*;
+    use gpui_kit::test::TestWindowExt;
+    use gpui_kit::{AppContext, Task, TestAppContext, WindowOptions};
+
+    #[gpui_kit::test]
+    fn production_overlay_records_only_shown_languages_and_never_double_counts(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(gpui_kit::init);
+        let (handle, owner) = cx
+            .update(|cx| -> anyhow::Result<_> {
+                let owner = cx.new(|_| {
+                    let mut session =
+                        Session::initial(Default::default(), None, None, Task::ready(()));
+                    session.settings.display_mode = DisplayMode::Translation;
+                    crate::mock::advance(&mut session.subtitles, 8, 2000);
+                    crate::mock::advance(&mut session.subtitles, 12, 3000);
+                    if let Some(row) = session.subtitles.current() {
+                        let now = std::time::Instant::now();
+                        session.presentation.source(row.transcript.key, now);
+                        session.presentation.translation(row.transcript.key, now);
+                    }
+                    session
+                });
+                let session = owner.clone();
+                let (handle, _) = gpui_kit::open_window(WindowOptions::default(), cx, |_, cx| {
+                    cx.new(|cx| OverlayView::new(session, cx))
+                })?;
+                Ok((handle, owner))
+            })
+            .expect("open production overlay");
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            let (source, translation) = owner.read(cx).presentation.summaries();
+            assert!(source.contains("绘制 0"));
+            assert!(translation.contains("绘制 1"));
+            window.render_frame(cx);
+            assert!(owner.read(cx).presentation.summaries().1.contains("绘制 1"));
+            owner.update(cx, |s, cx| {
+                s.settings.display_mode = DisplayMode::Bilingual;
+                cx.notify();
+            });
+            window.render_frame(cx);
+            assert!(owner.read(cx).presentation.summaries().0.contains("绘制 1"));
+        })
+        .expect("paint production overlay");
+    }
 }
