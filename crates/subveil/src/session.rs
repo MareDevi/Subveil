@@ -267,6 +267,12 @@ impl Session {
                             session.restore_profile_selection();
                         }
                         session.asr_config.vad_model = preferences.vad_model;
+                        if let Some(ms) = preferences.vad_hangover_ms {
+                            session.asr_config.vad.trailing_silence_ms = ms;
+                        }
+                        if let Some(ms) = preferences.vad_maximum_ms {
+                            session.asr_config.vad.max_segment_ms = ms;
+                        }
                         session.incremental_translation = preferences.incremental_translation;
                         session.asr_config.local_compute = if preferences.asr_cuda {
                             subveil_translate::Compute::Gpu(0)
@@ -645,7 +651,9 @@ impl Session {
             self.tick = self.tick.saturating_add(1);
             self.next_tick = now + Duration::from_millis(250);
         }
-        changed |= self.subtitles.advance_presentation(now_ms);
+        changed |= self
+            .subtitles
+            .advance_presentation_grouped(now_ms, self.settings.merge_short_segments);
         if changed {
             cx.notify();
         }
@@ -1314,6 +1322,8 @@ impl Session {
                 subveil_translate::Compute::Gpu(_)
             ),
             whisper_block_ms: Some(self.asr_config.whisper_block_ms),
+            vad_hangover_ms: Some(self.asr_config.vad.trailing_silence_ms),
+            vad_maximum_ms: Some(self.asr_config.vad.max_segment_ms),
         };
         self.saving_local = true;
         cx.notify();

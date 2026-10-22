@@ -81,6 +81,15 @@ pub struct SubtitleState {
     highest_segment_id: Option<u64>,
 }
 
+fn reading_units(entry: &Subtitle) -> u64 {
+    match &entry.translation {
+        TranslationState::Complete(text) => {
+            text.chars().map(|c| if c.is_ascii() { 1 } else { 2 }).sum()
+        }
+        _ => 0,
+    }
+}
+
 impl SubtitleState {
     /// Start an empty session. Segment IDs must increase for newly seen segments.
     /// History is bounded to 1..256 rows and lifetimes to 1..60 seconds.
@@ -153,6 +162,12 @@ impl SubtitleState {
     /// Schedule completed pairs in source order; each receives at least three seconds.
     /// The bounded history may still evict rows under sustained overload.
     pub fn advance_presentation(&mut self, now_ms: u64) -> bool {
+        self.advance_presentation_grouped(now_ms, false)
+    }
+
+    /// Optionally coalesce up to three adjacent short completed pairs; identities stay separate.
+    /// Only already-ready pairs are grouped, so grouping never waits for recognition or translation.
+    pub fn advance_presentation_grouped(&mut self, now_ms: u64, merge_short: bool) -> bool {
         let mut changed = false;
         for entry in &mut self.entries {
             if entry.read_until_ms.is_some_and(|until| now_ms >= until) {
@@ -161,22 +176,77 @@ impl SubtitleState {
                 changed = true;
             }
         }
-        if !self
+        if self
             .entries
             .iter()
             .any(|entry| entry.read_until_ms.is_some())
-            && let Some(entry) = self.entries.iter_mut().find(|entry| entry.awaiting_read)
         {
-            let text = match &entry.translation {
-                TranslationState::Complete(text) => text.as_str(),
-                _ => "",
-            };
-            let units: u64 = text.chars().map(|c| if c.is_ascii() { 1 } else { 2 }).sum();
-            let reading_ms = (units.saturating_mul(1000) / 15).clamp(3_000, 10_000);
-            entry.read_until_ms = Some(now_ms.saturating_add(reading_ms));
-            changed = true;
+            return changed;
         }
-        changed
+        let Some(first) = self
+            .entries
+            .iter()
+            .position(|entry| entry.awaiting_read && !entry.expired)
+        else {
+            return changed;
+        };
+        let mut count = 1;
+        let mut units = reading_units(&self.entries[first]);
+        let mut source_units = self.entries[first].transcript.text.chars().count();
+        if merge_short && units <= 36 {
+            while count < 3 && first + count < self.entries.len() {
+                let previous = &self.entries[first + count - 1];
+                let next = &self.entries[first + count];
+                let next_units = reading_units(next);
+                let next_source = next.transcript.text.chars().count();
+                if !next.awaiting_read
+                    || next.expired
+                    || !next.is_final
+                    || !matches!(next.translation, TranslationState::Complete(_))
+                    || next.transcript.language != previous.transcript.language
+                    || next.transcript.start_ms < previous.transcript.start_ms
+                    || next.transcript.start_ms > previous.transcript.end_ms.saturating_add(600)
+                    || next.transcript.end_ms < previous.transcript.end_ms
+                    || next_units > 36
+                    || units + next_units > 72
+                    || source_units + next_source > 80
+                {
+                    break;
+                }
+                count += 1;
+                units += next_units;
+                source_units += next_source;
+            }
+        }
+        let reading_ms = (units.saturating_mul(1000) / 15).clamp(3_000, 10_000);
+        let until = now_ms.saturating_add(reading_ms);
+        for entry in self.entries.iter_mut().skip(first).take(count) {
+            entry.read_until_ms = Some(until);
+        }
+        true
+    }
+
+    /// At most two visual slots: a bounded completed reading group and the latest hypothesis.
+    pub fn visible_groups(&self) -> Vec<Vec<&Subtitle>> {
+        let reading: Vec<_> = self
+            .entries
+            .iter()
+            .filter(|entry| entry.read_until_ms.is_some() && !entry.expired)
+            .take(3)
+            .collect();
+        let mut groups = Vec::with_capacity(2);
+        let latest = self.current().filter(|entry| {
+            !reading
+                .iter()
+                .any(|row| row.transcript.key == entry.transcript.key)
+        });
+        if !reading.is_empty() {
+            groups.push(reading);
+        }
+        if let Some(latest) = latest {
+            groups.push(vec![latest]);
+        }
+        groups
     }
 
     /// Apply a valid newer transcript or a same-revision partial-to-final promotion.
@@ -445,6 +515,73 @@ impl SubtitleState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn completed_group(gap: u64, language: &str, pending_middle: bool) -> SubtitleState {
+        let mut state = SubtitleState::new(1, 8, 10_000);
+        for id in 1..=4 {
+            let mut source = segment(1, id, 1, "short source");
+            source.start_ms = (id - 1) * (100 + gap);
+            source.end_ms = source.start_ms + 100;
+            if id == 2 {
+                source.language = Some(language.into());
+            }
+            assert!(state.apply(TranscriptEvent::Final(source.clone()), 0));
+            assert!(state.request_translation(source.key));
+            if id != 2 || !pending_middle {
+                assert!(state.finish_translation(source.key, Ok("short translation".into()), 1));
+            }
+        }
+        state
+    }
+
+    #[test]
+    fn reading_groups_are_bounded_and_keep_independent_identities() {
+        let mut state = completed_group(600, "en", false);
+        let history = state
+            .history()
+            .iter()
+            .map(|row| row.transcript.clone())
+            .collect::<Vec<_>>();
+        assert!(state.advance_presentation_grouped(100, true));
+        let groups = state.visible_groups();
+        assert_eq!(groups.iter().map(Vec::len).collect::<Vec<_>>(), vec![3, 1]);
+        assert_eq!(
+            groups[0]
+                .iter()
+                .map(|row| row.transcript.key.segment_id)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert_eq!(
+            state
+                .history()
+                .iter()
+                .map(|row| row.transcript.clone())
+                .collect::<Vec<_>>(),
+            history
+        );
+        assert!(!state.advance_presentation_grouped(3_499, true));
+        assert!(state.advance_presentation_grouped(3_500, true));
+        assert_eq!(state.visible_groups()[0][0].transcript.key.segment_id, 4);
+    }
+
+    #[test]
+    fn grouping_never_crosses_gap_language_pending_or_disabled_policy() {
+        for (gap, language, pending, enabled) in [
+            (601, "en", false, true),
+            (0, "ja", false, true),
+            (0, "en", true, true),
+            (0, "en", false, false),
+        ] {
+            let mut state = completed_group(gap, language, pending);
+            assert!(state.advance_presentation_grouped(100, enabled));
+            assert_eq!(state.visible_groups()[0].len(), 1);
+        }
+        let mut state = completed_group(0, "en", false);
+        state.entries[1].translation = TranslationState::Complete("x".repeat(37));
+        state.advance_presentation_grouped(100, true);
+        assert_eq!(state.visible_groups()[0].len(), 1);
+    }
 
     fn segment(session: u64, id: u64, revision: u32, text: &str) -> TranscriptSegment {
         TranscriptSegment {

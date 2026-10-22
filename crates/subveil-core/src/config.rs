@@ -46,6 +46,8 @@ pub struct OverlaySettings {
     pub click_through: bool,
     /// Language layout.
     pub display_mode: DisplayMode,
+    /// Group adjacent short completed pairs into one reading slot.
+    pub merge_short_segments: bool,
     /// Inactivity time before a subtitle expires.
     pub ttl_ms: u64,
     /// Maximum retained subtitle segments.
@@ -68,6 +70,7 @@ impl Default for OverlaySettings {
             max_lines: 3,
             click_through: true,
             display_mode: DisplayMode::Bilingual,
+            merge_short_segments: false,
             ttl_ms: 8_000,
             history_limit: 32,
         }

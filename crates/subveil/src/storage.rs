@@ -89,12 +89,22 @@ pub struct LocalPreferences {
     pub gpu_name: Option<String>,
     pub asr_cuda: bool,
     pub whisper_block_ms: Option<u32>,
+    pub vad_hangover_ms: Option<u32>,
+    pub vad_maximum_ms: Option<u32>,
     pub profiles: Vec<ServiceProfile>,
     pub selected_profile: u32,
     pub capture_source: Option<SourcePreference>,
 }
 impl LocalPreferences {
     fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.vad_hangover_ms
+                .is_none_or(|n| matches!(n, 300 | 600 | 1000))
+                && self
+                    .vad_maximum_ms
+                    .is_none_or(|n| matches!(n, 5000 | 10000 | 15000)),
+            "语音分段参数无效"
+        );
         anyhow::ensure!(self.profiles.len() <= 32, "服务配置超过 32 个");
         let mut ids = std::collections::HashSet::new();
         let mut names = std::collections::HashSet::new();
@@ -302,6 +312,8 @@ mod tests {
             gpu_name: Some("Vulkan · test GPU".into()),
             asr_cuda: true,
             whisper_block_ms: Some(2000),
+            vad_hangover_ms: Some(300),
+            vad_maximum_ms: Some(5000),
             ..Default::default()
         };
         save_local(&path, &preferences)?;
@@ -312,6 +324,11 @@ mod tests {
         assert_eq!(restored.translation_model, preferences.translation_model);
         assert!(restored.asr_cuda);
         assert_eq!(restored.whisper_block_ms, Some(2000));
+        assert_eq!(restored.vad_hangover_ms, Some(300));
+        assert_eq!(restored.vad_maximum_ms, Some(5000));
+        let mut invalid = restored.clone();
+        invalid.vad_hangover_ms = Some(0);
+        assert!(save_local(&path, &invalid).is_err());
         fs::remove_dir_all(directory)?;
         Ok(())
     }

@@ -6,6 +6,7 @@ impl ControlView {
         let settings = &session.settings;
         let mode_session = self.session.clone();
         let switch_session = self.session.clone();
+        let reading_session = self.session.clone();
         column()
             .child(heading(
                 "字幕样式",
@@ -216,6 +217,9 @@ impl ControlView {
                         })
                     }),
             )
+            .child(Switch::new("merge-short-subtitles").label("合并相邻短句阅读位置").checked(settings.merge_short_segments)
+                .on_change(move |checked,_,cx| reading_session.update(cx,|s,cx|s.change_settings(|c|c.merge_short_segments = *checked,cx))))
+            .child(help("仅合并已完成的相邻短译文，最多三段；原始身份、记录和导出保持独立。关闭可作逐段对照。", cx))
             .child(help(
                 "浮窗宽度受显示器限制；Layer Shell 与鼠标穿透能力取决于 Wayland compositor。",
                 cx,

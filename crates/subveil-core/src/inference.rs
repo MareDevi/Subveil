@@ -2,7 +2,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Wire compatibility changes independently of the application's display version.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 /// Compiled helper identity, queried before weights or native devices are opened.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -130,6 +130,10 @@ pub enum Output {
         id: u64,
         /// Source text or sanitized error.
         result: Result<String, String>,
+        /// UTF-8 prefix whose token timestamps end within the 400 ms context window.
+        /// None when timestamps are missing, invalid or cut through a UTF-8 sequence.
+        #[serde(default)]
+        overlap_prefix: Option<String>,
         /// Native decoding time, excluding loading and IPC.
         inference_ms: u64,
     },

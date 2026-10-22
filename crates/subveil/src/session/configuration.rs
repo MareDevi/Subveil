@@ -14,9 +14,11 @@ pub(crate) enum Choice {
     Compute,
     AsrCompute,
     WhisperBlock,
+    VadHangover,
+    VadMaximum,
 }
 impl Choice {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 13] = [
         Self::ModelLanguage,
         Self::ModelMode,
         Self::Output,
@@ -28,6 +30,8 @@ impl Choice {
         Self::Compute,
         Self::AsrCompute,
         Self::WhisperBlock,
+        Self::VadHangover,
+        Self::VadMaximum,
     ];
 }
 impl Session {
@@ -97,6 +101,8 @@ impl Session {
                 .chain(self.gpu_devices.iter().map(|d| d.name.clone()))
                 .collect(),
             Choice::AsrCompute => vec!["CPU".into(), "NVIDIA CUDA0".into()],
+            Choice::VadHangover => [300, 600, 1000].map(|n| format!("{n} ms")).into(),
+            Choice::VadMaximum => [5, 10, 15].map(|n| format!("{n} 秒")).into(),
             Choice::WhisperBlock => vec!["2 秒".into(), "4 秒".into(), "8 秒".into()],
         }
     }
@@ -148,6 +154,8 @@ impl Session {
                 }
                 .into()
             }
+            Choice::VadHangover => format!("{} ms", self.asr_config.vad.trailing_silence_ms),
+            Choice::VadMaximum => format!("{} 秒", self.asr_config.vad.max_segment_ms / 1000),
             Choice::WhisperBlock => format!("{} 秒", self.asr_config.whisper_block_ms / 1000),
         }
     }
@@ -233,6 +241,20 @@ impl Session {
                 } else {
                     subveil_translate::Compute::Gpu(0)
                 }
+            }
+            Choice::VadHangover => {
+                self.asr_config.vad.trailing_silence_ms = match value {
+                    "300 ms" => 300,
+                    "600 ms" => 600,
+                    _ => 1000,
+                };
+            }
+            Choice::VadMaximum => {
+                self.asr_config.vad.max_segment_ms = match value {
+                    "5 秒" => 5000,
+                    "10 秒" => 10000,
+                    _ => 15000,
+                };
             }
             Choice::WhisperBlock => {
                 self.asr_config.whisper_block_ms = match value {

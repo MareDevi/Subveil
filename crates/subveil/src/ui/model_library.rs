@@ -54,6 +54,9 @@ impl ControlView {
                 .child(button("disable-vad", "使用能量分段", &self.session, |s, cx| { s.asr_config.vad_model = None; cx.notify(); }).disabled(busy))
                 .child(button("cancel-vad", "取消 VAD 安装", &self.session, |s, cx| {s.vad_models.cancel();cx.notify();}).disabled(!session.vad_models.downloading())))
             .child(help(session.vad_models.snapshot.status.clone(), cx))
+            .child(self.render_choice(Choice::VadHangover, "句尾静音等待", busy, cx))
+            .child(self.render_choice(Choice::VadMaximum, "最长语音分段", busy, cx))
+            .child(help("静音等待适用于能量 / Silero 分段和 Zipformer 端点；最长分段适用于离线识别。Whisper 使用独立 2 / 4 / 8 秒块长。标点只能封口可修订草稿，不把 Partial 伪装成 Final。", cx))
             .child(section(
                 "本地翻译",
                 "模型在本机运行；语音服务中选择本地翻译后生效。",

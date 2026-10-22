@@ -59,7 +59,8 @@ impl StreamingTranslationScheduler {
     pub fn poll(&mut self, segment: &TranscriptSegment, now_ms: u64) -> Option<TranscriptSegment> {
         if self.identity != Some((segment.key.session_id, segment.key.segment_id))
             || self.hypotheses.len() < 3
-            || self.candidate.chars().count() < 12
+            || (self.candidate.chars().count() < 12
+                && !(self.candidate.chars().count() >= 4 && sentence_end(&self.candidate)))
             || !segment.text.starts_with(&self.candidate)
             || self.candidate == self.submitted
             || now_ms.saturating_sub(self.candidate_since) < 600
@@ -77,7 +78,47 @@ impl StreamingTranslationScheduler {
         Some(source)
     }
 }
+fn sentence_end(text: &str) -> bool {
+    text.ends_with(['。', '！', '？', '!', '?', '.'])
+}
 fn boundary(prefix: &str, english: bool) -> String {
+    // Prefer a complete sentence over its unfinished tail. This is still a revisable
+    // translation prefix; recognition owns Final identities and audio times.
+    let sentence = prefix
+        .char_indices()
+        .filter_map(|(i, c)| {
+            if !matches!(c, '。' | '！' | '？' | '!' | '?' | '.') {
+                return None;
+            }
+            let end = i + c.len_utf8();
+            if c.is_ascii()
+                && prefix[end..]
+                    .chars()
+                    .next()
+                    .is_some_and(|c| !c.is_whitespace())
+            {
+                return None;
+            }
+            if c == '.' {
+                let word = prefix[..end]
+                    .split_whitespace()
+                    .next_back()
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                if ["mr.", "mrs.", "ms.", "dr.", "prof.", "e.g.", "i.e."].contains(&word.as_str())
+                    || (word.len() == 2 && word.as_bytes()[0].is_ascii_alphabetic())
+                {
+                    return None;
+                }
+            }
+            Some(end)
+        })
+        .next_back();
+    if let Some(end) = sentence
+        && prefix[..end].trim().chars().count() >= 4
+    {
+        return prefix[..end].trim().into();
+    }
     if english {
         // Drop the last token unless a whitespace or punctuation boundary was observed.
         let end = prefix
@@ -123,6 +164,36 @@ mod tests {
             start_ms: 0,
             end_ms: 2000,
         }
+    }
+    #[test]
+    fn sentence_prefix_closes_before_unfinished_tail_without_inventing_final() -> anyhow::Result<()>
+    {
+        assert_eq!(boundary("Stop now! The driver is still", true), "Stop now!");
+        assert_eq!(
+            boundary("今日は雨です。明日は晴れそう", false),
+            "今日は雨です。"
+        );
+        assert_eq!(
+            boundary("Dr. Smith paid 3.14 dollars and", true),
+            "Dr. Smith paid 3.14 dollars"
+        );
+        let mut scheduler = StreamingTranslationScheduler::default();
+        for revision in 1..=3 {
+            scheduler.observe(&source(revision, "Stop now! unfinished"), 0);
+        }
+        assert!(
+            scheduler
+                .poll(&source(3, "Stop now! unfinished"), 599)
+                .is_none()
+        );
+        let accepted = scheduler
+            .poll(&source(3, "Stop now! unfinished"), 600)
+            .ok_or_else(|| anyhow::anyhow!("stable sentence absent"))?;
+        assert_eq!(accepted.text, "Stop now!");
+        assert_eq!(accepted.key, source(3, "").key);
+        // A rewritten recognition hypothesis cannot reuse the preceding sentence.
+        assert!(scheduler.poll(&source(4, "Keep going!"), 3000).is_none());
+        Ok(())
     }
     #[test]
     fn growing_stable_prefix_does_not_starve_continuous_speech() {

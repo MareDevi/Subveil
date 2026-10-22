@@ -130,7 +130,7 @@ fn run() -> anyhow::Result<()> {
         samples: 16000,
         timeout_ms: 20_000,
     };
-    infer(&mut state, &warmup, &[0.; 16000])?;
+    infer(&mut state, &warmup, &[0.; 16000], context.token_eot())?;
     send(&Output::Ready(format!(
         "本地 Whisper 已就绪 · {} · 短块识别 · 不上传音频",
         if gpu { "CUDA0" } else { "CPU" }
@@ -138,10 +138,15 @@ fn run() -> anyhow::Result<()> {
     let mut reader = std::io::stdin().lock();
     while let Some((request, samples)) = read_request(&mut reader)? {
         let start = Instant::now();
-        let result = infer(&mut state, &request, &samples).map_err(|e| e.to_string());
+        let (result, overlap_prefix) =
+            match infer(&mut state, &request, &samples, context.token_eot()) {
+                Ok((text, prefix)) => (Ok(text), prefix),
+                Err(error) => (Err(error.to_string()), None),
+            };
         send(&Output::Recognition {
             id: request.id,
             result,
+            overlap_prefix,
             inference_ms: start.elapsed().as_millis() as u64,
         })?;
     }
@@ -151,7 +156,8 @@ fn infer(
     state: &mut whisper_rs::WhisperState,
     request: &SpeechInput,
     samples: &[f32],
-) -> anyhow::Result<String> {
+    end_of_text: i32,
+) -> anyhow::Result<(String, Option<String>)> {
     let deadline = Instant::now() + Duration::from_millis(request.timeout_ms);
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
     params.set_n_threads(4);
@@ -163,6 +169,7 @@ fn infer(
     params.set_print_progress(false);
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
+    params.set_token_timestamps(true);
     params.set_suppress_blank(true);
     params.set_suppress_nst(true);
     params.set_temperature(0.);
@@ -174,11 +181,45 @@ fn infer(
         .map_err(|_| anyhow::anyhow!("Whisper 推理失败或超时"))?;
     ensure!(Instant::now() < deadline, "Whisper 推理超时");
     let mut text = String::new();
+    let mut tokens = Vec::new();
     for segment in state.as_iter() {
+        for ix in 0..segment.n_tokens() {
+            let token = segment.get_token(ix).context("Whisper token 索引无效")?;
+            if token.token_id() >= end_of_text {
+                continue;
+            }
+            let data = token.token_data();
+            tokens.push((
+                token.to_bytes().context("Whisper token 字节无效")?.to_vec(),
+                data.t0,
+                data.t1,
+            ));
+            ensure!(tokens.len() <= 512, "Whisper 时间对齐 token 过多");
+        }
         text.push_str(segment.to_str().context("Whisper 返回无效 UTF-8")?);
         ensure!(text.len() <= 16_384, "Whisper 结果超过长度限制");
     }
-    Ok(text.trim().to_owned())
+    let text = text.trim().to_owned();
+    let prefix = timed_context_prefix(&tokens).filter(|prefix| text.starts_with(prefix));
+    Ok((text, prefix))
+}
+
+// Native whisper.cpp times use centiseconds, despite some generated docs saying milliseconds.
+fn timed_context_prefix(tokens: &[(Vec<u8>, i64, i64)]) -> Option<String> {
+    let mut bytes = Vec::new();
+    let mut previous_end = 0;
+    for (token, start, end) in tokens {
+        if *start < previous_end || *end <= *start {
+            return None;
+        }
+        if *end > 40 {
+            break;
+        }
+        bytes.extend_from_slice(token);
+        previous_end = *end;
+    }
+    let prefix = String::from_utf8(bytes).ok()?.trim().to_owned();
+    (4..=80).contains(&prefix.chars().count()).then_some(prefix)
 }
 fn main() {
     if let Err(error) = run() {
@@ -190,6 +231,34 @@ fn main() {
 mod tests {
     use super::*;
     use std::io::Cursor;
+    #[test]
+    fn timed_prefix_uses_centiseconds_and_requires_complete_valid_tokens() {
+        let tokens = vec![
+            (b" hello".to_vec(), 0, 20),
+            (b" world".to_vec(), 20, 40),
+            (b" again".to_vec(), 40, 60),
+        ];
+        assert_eq!(
+            timed_context_prefix(&tokens).as_deref(),
+            Some("hello world")
+        );
+        assert!(timed_context_prefix(&[(b"hello".to_vec(), 0, 41)]).is_none());
+        for (start, end) in [(-1, 20), (0, 0), (20, 10)] {
+            assert!(timed_context_prefix(&[(b"hello".to_vec(), start, end)]).is_none());
+        }
+        assert!(
+            timed_context_prefix(&[(b"hello".to_vec(), 0, 20), (b"world".to_vec(), 19, 30)])
+                .is_none()
+        );
+        let japanese = "到着します".as_bytes();
+        let split = vec![
+            (japanese[..4].to_vec(), 0, 20),
+            (japanese[4..].to_vec(), 20, 40),
+        ];
+        assert_eq!(timed_context_prefix(&split).as_deref(), Some("到着します"));
+        assert!(timed_context_prefix(&[(japanese[..4].to_vec(), 0, 20)]).is_none());
+        assert!(timed_context_prefix(&[(b"yes".to_vec(), 0, 20)]).is_none());
+    }
     fn packet(samples: usize, pcm: &[f32]) -> anyhow::Result<Vec<u8>> {
         let header = SpeechInput {
             id: 1,

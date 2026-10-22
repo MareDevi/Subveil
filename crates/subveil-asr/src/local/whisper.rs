@@ -224,10 +224,21 @@ impl WhisperEngine {
                 id,
                 result,
                 inference_ms,
+                overlap_prefix,
             } if id == self.next_id => {
                 let text = result.map_err(anyhow::Error::msg)?;
                 ensure!(text.len() <= 16_384, "Whisper 文本过长");
-                Ok(WhisperResult { text, inference_ms })
+                ensure!(
+                    overlap_prefix
+                        .as_ref()
+                        .is_none_or(|p| p.len() <= 16_384 && text.starts_with(p)),
+                    "Whisper 对齐前缀无效"
+                );
+                Ok(WhisperResult {
+                    text,
+                    inference_ms,
+                    overlap_prefix,
+                })
             }
             _ => anyhow::bail!("Whisper 返回过期或无效协议"),
         }
@@ -248,6 +259,8 @@ pub struct WhisperResult {
     pub text: String,
     /// Native decode duration without IPC or loading.
     pub inference_ms: u64,
+    /// Prefix restricted to valid native timestamps within the audio look-back window.
+    pub overlap_prefix: Option<String>,
 }
 struct Job {
     epoch: u64,
@@ -279,18 +292,26 @@ impl Overlap {
         contiguous
     }
 }
-fn remove_overlap(previous: &str, current: &str) -> String {
-    let left: Vec<_> = previous.chars().collect();
-    let right: Vec<_> = current.chars().collect();
-    let count = (4..=left.len().min(right.len()).min(80))
-        .rev()
-        .find(|n| left[left.len() - n..] == right[..*n])
-        .unwrap_or(0);
-    right[count..]
-        .iter()
-        .collect::<String>()
-        .trim_start()
-        .to_owned()
+fn remove_overlap(previous: &str, current: &str, timed_prefix: Option<&str>) -> String {
+    let Some(prefix) = timed_prefix.filter(|prefix| {
+        (4..=80).contains(&prefix.chars().count()) && previous.trim_end().ends_with(*prefix)
+    }) else {
+        return current.to_owned();
+    };
+    let Some(remainder) = current.strip_prefix(prefix) else {
+        return current.to_owned();
+    };
+    // BPE timestamps may end inside an English word. Do not turn "there" into "re".
+    let previous_head = previous.trim_end().strip_suffix(prefix).unwrap_or_default();
+    let latin_pair = |a: Option<char>, b: Option<char>| {
+        a.is_some_and(|c| c.is_ascii_alphanumeric()) && b.is_some_and(|c| c.is_ascii_alphanumeric())
+    };
+    if latin_pair(prefix.chars().last(), remainder.chars().next())
+        || latin_pair(previous_head.chars().last(), prefix.chars().next())
+    {
+        return current.to_owned();
+    }
+    remainder.trim_start().to_owned()
 }
 struct Completed {
     job: Job,
@@ -389,7 +410,11 @@ fn run_loaded(
                         && let Some((end, text)) = &previous_result
                         && *end == completed.job.original_start
                     {
-                        remove_overlap(text, &completed.result.text)
+                        remove_overlap(
+                            text,
+                            &completed.result.text,
+                            completed.result.overlap_prefix.as_deref(),
+                        )
                     } else {
                         completed.result.text.clone()
                     };
@@ -500,10 +525,25 @@ mod tests {
         };
         assert!(!overlap.prepend(&mut gap, 1000));
         assert_eq!(
-            remove_overlap("電車が到着します", "到着します。ご注意ください"),
+            remove_overlap(
+                "電車が到着します",
+                "到着します。ご注意ください",
+                Some("到着します")
+            ),
             "。ご注意ください"
         );
-        assert_eq!(remove_overlap("no", "no extra cost"), "no extra cost");
+        assert_eq!(
+            remove_overlap("no", "no extra cost", Some("no")),
+            "no extra cost"
+        );
+        assert_eq!(
+            remove_overlap("go go go", "go go go now", None),
+            "go go go now"
+        );
+        assert_eq!(
+            remove_overlap("old words", "new words", Some("new ")),
+            "new words"
+        );
     }
     fn shell(script: &str) -> anyhow::Result<WhisperEngine> {
         WhisperEngine::spawn(
