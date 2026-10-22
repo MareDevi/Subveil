@@ -10,3 +10,5 @@ CI 在恢复 Rust 缓存后仅清理 `sherpa-onnx-sys` 包的 Cargo 构建产物
 
 
 第一次仅清理 Cargo 包后，[run 39753051357](https://github.com/MareDevi/Subveil/actions/runs/39753051357) 证明构建脚本已重新编译，但仍缺少静态库。这排除了“只需让脚本重跑”的假设：rust-cache 清理文件后保留空的 `lib/` 目录，上游 `lib_dir.is_dir()` 因而误判已下载。修复补充删除 CI 自己的 `target/sherpa-onnx-prebuilt`，迫使重新获取完整原生依赖。删除仅在 runner 的构建目录，不影响模型、源代码或用户文件；不更改上游源码。完整远端验证继续跟踪。
+
+[run 39753659966](https://github.com/MareDevi/Subveil/actions/runs/39753659966) 已重新下载并成功编译 sherpa，证明缓存修复生效。随后 Vulkan 原生构建明确报缺 `SPIRV-HeadersConfig.cmake`；补充 Ubuntu 构建包 `spirv-headers`，不改变运行时后端。包信息核对 [Ubuntu 24.04 官方清单](https://packages.ubuntu.com/noble/spirv-headers)。继续等待完整 CI。
