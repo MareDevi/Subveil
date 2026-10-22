@@ -22,6 +22,10 @@ jobs:
         with:
           version: 2026.10.15
       - uses: Swatinem/rust-cache@v2
+      # rust-cache prunes target/sherpa-onnx-prebuilt but can retain build-script
+      # outputs that refer to it. Re-run this dependency's downloader/link setup.
+      - name: Refresh sherpa native link setup after cache restore
+        run: mise exec -- cargo clean --package sherpa-onnx-sys
       - run: mise run doctor
       - run: mise run check
       - run: mise run package:debug
