@@ -332,6 +332,7 @@ fn cancellation_interrupts_stalled_http_without_activation() -> anyhow::Result<(
         &shared,
         Some(&url),
         true,
+        &DownloadSource::default(),
     ));
     assert!(result.is_err_and(|error| error.to_string() == "下载已取消"));
     canceller
@@ -488,5 +489,40 @@ fn uninstall_respects_install_lock_and_preserves_unknown_files() -> anyhow::Resu
     assert_eq!(fs::read(directory.join("user-notes.txt"))?, b"preserve");
     assert!(directory.join(".install.lock").exists());
     fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn explicit_mirror_preserves_publisher_paths_and_rejects_credentials() -> anyhow::Result<()> {
+    let source = DownloadSource::parse("https://mirror.example:8443/")?;
+    let model = fixture()?;
+    assert_eq!(
+        source.file_url(&model, &model.files[0]),
+        format!(
+            "https://mirror.example:8443/{}/resolve/{}/{}",
+            model.repository, model.revision, model.files[0].path
+        )
+    );
+    for invalid in [
+        "http://mirror.example",
+        "https://key@mirror.example",
+        "https://u:p@mirror.example",
+        "https://mirror.example/path",
+        "https://mirror.example?token=x",
+        "https://mirror.example#x",
+        "https://mirror.example\n",
+    ] {
+        assert!(DownloadSource::parse(invalid).is_err());
+    }
+    for url in [
+        "http://mirror.example/x",
+        "https://mirror.example.evil/x",
+        "https://other.example/x",
+        "https://x@mirror.example:8443/x",
+    ] {
+        assert!(!source.allows_redirect(&reqwest::Url::parse(url)?));
+    }
+    assert!(source.allows_redirect(&reqwest::Url::parse("https://mirror.example:8443/x")?));
+    assert!(source.allows_redirect(&reqwest::Url::parse("https://cdn-lfs.hf.co/x")?));
     Ok(())
 }

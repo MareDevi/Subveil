@@ -3,6 +3,8 @@ use super::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Choice {
+    ModelLanguage,
+    ModelMode,
     Output,
     Profile,
     SourceLanguage,
@@ -14,7 +16,9 @@ pub(crate) enum Choice {
     WhisperBlock,
 }
 impl Choice {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 11] = [
+        Self::ModelLanguage,
+        Self::ModelMode,
         Self::Output,
         Self::Profile,
         Self::SourceLanguage,
@@ -41,6 +45,11 @@ impl Session {
     }
     pub fn choice_options(&self, choice: Choice) -> Vec<String> {
         match choice {
+            Choice::ModelLanguage => vec!["全部语言".into(), "en".into(), "ja".into(), "zh".into()],
+            Choice::ModelMode => ["全部模式", "原生流式", "离线分段", "文字翻译"]
+                .iter()
+                .map(|s| (*s).into())
+                .collect(),
             Choice::Output => self.output_labels(),
             Choice::Profile => self.profiles.iter().map(|p| p.name.clone()).collect(),
             Choice::SourceLanguage => {
@@ -83,12 +92,7 @@ impl Session {
             })
             .map(|p| p.name().into())
             .collect(),
-            Choice::TranslationModel => self
-                .translation_models
-                .catalog
-                .iter()
-                .map(|m| m.name.clone())
-                .collect(),
+            Choice::TranslationModel => self.model_filter.names(&self.translation_models),
             Choice::Compute => std::iter::once("CPU".into())
                 .chain(self.gpu_devices.iter().map(|d| d.name.clone()))
                 .collect(),
@@ -98,6 +102,20 @@ impl Session {
     }
     pub fn choice_value(&self, choice: Choice) -> String {
         match choice {
+            Choice::ModelLanguage => {
+                if self.model_filter.language.is_empty() {
+                    "全部语言".into()
+                } else {
+                    self.model_filter.language.clone()
+                }
+            }
+            Choice::ModelMode => {
+                if self.model_filter.mode.is_empty() {
+                    "全部模式".into()
+                } else {
+                    self.model_filter.mode.clone()
+                }
+            }
             Choice::Output => self.output_value(),
             Choice::Profile => self
                 .profiles
@@ -134,6 +152,29 @@ impl Session {
         }
     }
     pub fn select_choice(&mut self, choice: Choice, value: &str, cx: &mut Context<Self>) {
+        if matches!(choice, Choice::ModelLanguage | Choice::ModelMode) {
+            if self.choice_options(choice).iter().any(|v| v == value) {
+                match choice {
+                    Choice::ModelLanguage => {
+                        self.model_filter.language = if value == "全部语言" {
+                            String::new()
+                        } else {
+                            value.into()
+                        }
+                    }
+                    Choice::ModelMode => {
+                        self.model_filter.mode = if value == "全部模式" {
+                            String::new()
+                        } else {
+                            value.into()
+                        }
+                    }
+                    _ => {}
+                }
+                cx.notify();
+            }
+            return;
+        }
         if choice == Choice::Output {
             self.select_output(value, cx);
             return;
@@ -278,5 +319,26 @@ impl Session {
             issues.push("离线模式不允许云服务".into());
         }
         issues
+    }
+}
+
+impl Session {
+    pub fn set_download_source(&mut self, input: &str, cx: &mut Context<Self>) {
+        if self.configuration_busy() {
+            return;
+        }
+        match subveil_asr::models::DownloadSource::parse(input) {
+            Ok(source) => {
+                self.local_models.source_error = false;
+                self.translation_models.source_error = false;
+                self.vad_models.source_error = false;
+                self.local_models.source = source.clone();
+                self.translation_models.source = source.clone();
+                self.vad_models.source = source;
+                self.message = "下载源已应用；安装仍需显式点击，点击保存本地设置后持久化".into();
+            }
+            Err(error) => self.message = error.to_string(),
+        }
+        cx.notify();
     }
 }

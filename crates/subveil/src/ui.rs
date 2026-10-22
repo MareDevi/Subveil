@@ -143,6 +143,10 @@ fn section(title: &'static str, description: &'static str, cx: &App) -> gpui_kit
 
 pub struct ControlView {
     history_search: Entity<InputState>,
+    model_search: Entity<InputState>,
+    download_origin: Entity<InputState>,
+    download_origin_applied: String,
+    local_model_items: Vec<SharedString>,
     profile_name: Entity<InputState>,
     choices: Vec<ChoiceView>,
     audio_source: Entity<SelectState<Vec<SharedString>>>,
@@ -185,6 +189,25 @@ impl ControlView {
         }
     }
     fn new(session: Entity<Session>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let model_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder("搜索模型名称、用途或发布者"));
+        let search_owner = session.clone();
+        let model_search_subscription = cx.subscribe(&model_search, move |_, input, event, cx| {
+            if matches!(event, InputEvent::Change) {
+                let query: String = input.read(cx).value().chars().take(256).collect();
+                search_owner.update(cx, |s, cx| {
+                    s.model_filter.query = query;
+                    cx.notify();
+                });
+            }
+        });
+        let origin = session.read(cx).local_models.source.origin().to_string();
+        let download_origin_applied = origin.clone();
+        let download_origin = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("https://huggingface.co")
+                .default_value(origin)
+        });
         let history_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索原文或译文"));
         let search_subscription = cx.observe(&history_search, |_, _, cx| cx.notify());
         let profile_name =
@@ -247,15 +270,24 @@ impl ControlView {
                 cx,
             )
         });
-        let model_names = session
+        let model_names: Vec<_> = session
+            .read(cx)
+            .model_filter
+            .names(&session.read(cx).local_models)
+            .into_iter()
+            .map(SharedString::from)
+            .collect();
+        let model_index = session
             .read(cx)
             .local_models
-            .catalog
-            .iter()
-            .map(|model| SharedString::from(model.name.clone()))
-            .collect::<Vec<_>>();
-        let model_index = (!model_names.is_empty())
-            .then(|| IndexPath::new(session.read(cx).local_models.selected));
+            .current()
+            .and_then(|model| {
+                model_names
+                    .iter()
+                    .position(|name| name.as_ref() == model.name)
+            })
+            .map(IndexPath::new);
+        let local_model_items = model_names.clone();
         let local_model = cx.new(|cx| SelectState::new(model_names, model_index, window, cx));
         let model_session = session.clone();
         let model_selected = cx.subscribe(&local_model, move |_, _, event, cx| {
@@ -383,6 +415,12 @@ impl ControlView {
             },
         );
         let observed = cx.observe_in(&session, window, |this, session, window, cx| {
+            let origin = session.read(cx).local_models.source.origin().to_string();
+            if origin != this.download_origin_applied {
+                this.download_origin_applied = origin.clone();
+                this.download_origin
+                    .update(cx, |s, cx| s.set_value(origin, window, cx));
+            }
             for choice in &mut this.choices {
                 let items: Vec<_> = session
                     .read(cx)
@@ -475,6 +513,18 @@ impl ControlView {
                 this.provider
                     .update(cx, |state, cx| state.set_selected_value(&value, window, cx));
             }
+            let items: Vec<_> = session
+                .read(cx)
+                .model_filter
+                .names(&session.read(cx).local_models)
+                .into_iter()
+                .map(SharedString::from)
+                .collect();
+            if items != this.local_model_items {
+                this.local_model_items = items.clone();
+                this.local_model
+                    .update(cx, |s, cx| s.set_items(items, window, cx));
+            }
             if let Some(model) = session.read(cx).local_models.current() {
                 let value = SharedString::from(model.name.clone());
                 if this.local_model.read(cx).selected_value() != Some(&value) {
@@ -506,8 +556,13 @@ impl ControlView {
         ]);
         input_subscriptions.extend(choice_subscriptions);
         input_subscriptions.push(search_subscription);
+        input_subscriptions.push(model_search_subscription);
         let credentials_generation = session.read(cx).credentials_generation;
         Self {
+            model_search,
+            download_origin,
+            download_origin_applied,
+            local_model_items,
             history_search,
             profile_name,
             choices,

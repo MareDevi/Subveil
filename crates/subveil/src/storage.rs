@@ -78,6 +78,7 @@ impl Default for ServiceProfile {
 #[derive(Clone, Default, serde::Deserialize, serde::Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LocalPreferences {
+    pub download_origin: String,
     pub asr_model: Option<PathBuf>,
     pub vad_model: Option<PathBuf>,
     pub translation_model: Option<PathBuf>,

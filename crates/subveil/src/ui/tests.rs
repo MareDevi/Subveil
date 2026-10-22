@@ -98,3 +98,90 @@ fn stop_preserves_history_clear_rejects_running_and_navigation_restores_focus(
     })
     .expect("verify compact production layout");
 }
+
+#[gpui_kit::test]
+fn model_search_preserves_selection_and_endpoint_requires_explicit_apply(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        init(cx);
+    });
+    let (handle, session) = cx.update(|cx| {
+        let owner = cx.new(|_| {
+            let mut s = Session::initial(Default::default(), None, None, Task::ready(()));
+            s.restoring_local = false;
+            s
+        });
+        let session = owner.clone();
+        let (handle, _) = gpui_kit::open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                    Default::default(),
+                    size(px(1100.), px(2000.)),
+                ))),
+                ..Default::default()
+            },
+            cx,
+            |window, cx| cx.new(|cx| ControlView::new(owner, window, cx)),
+        )
+        .expect("model library window");
+        (handle, session)
+    });
+    let original = cx.update(|cx| {
+        session
+            .read(cx)
+            .local_models
+            .current()
+            .map(|m| m.id.clone())
+    });
+    cx.update_window(handle, |_, window, cx| {
+        window.press("ctrl-5", cx);
+    })
+    .expect("open models");
+    cx.run_until_parked();
+    cx.update_window(handle, |_, window, cx| {
+        window.click("model-search", cx);
+        window.input("no-match-97531", cx);
+    })
+    .expect("type model filter");
+    cx.run_until_parked();
+    cx.update_window(handle, |_, window, cx| {
+        let s = session.read(cx);
+        assert_eq!(s.model_filter.query, "no-match-97531");
+        assert_eq!(s.local_models.current().map(|m| m.id.clone()), original);
+        assert!(
+            s.local_models
+                .catalog
+                .iter()
+                .all(|m| !s.model_filter.matches(m))
+        );
+        window.click("download-origin", cx);
+        window.press("ctrl-a", cx);
+        window.input("https://mirror.example", cx);
+        assert_eq!(
+            session.read(cx).local_models.source.origin(),
+            "https://huggingface.co"
+        );
+        window.click("apply-download-origin", cx);
+    })
+    .expect("apply explicit endpoint");
+    cx.run_until_parked();
+    cx.update_window(handle, |_, window, cx| {
+        assert_eq!(
+            session.read(cx).local_models.source.origin(),
+            "https://mirror.example"
+        );
+        assert!(!session.read(cx).local_models.downloading());
+        window.click("download-origin", cx);
+        window.press("ctrl-a", cx);
+        window.input("http://insecure.example", cx);
+        window.click("apply-download-origin", cx);
+    })
+    .expect("reject insecure endpoint");
+    cx.run_until_parked();
+    cx.update(|cx| {
+        assert_eq!(
+            session.read(cx).local_models.source.origin(),
+            "https://mirror.example"
+        )
+    });
+}

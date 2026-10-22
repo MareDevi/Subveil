@@ -348,6 +348,57 @@ impl Shared {
         self.stop.load(Ordering::Relaxed)
     }
 }
+/// Explicit HTTPS endpoint for the same immutable publisher paths and hashes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DownloadSource(String);
+impl Default for DownloadSource {
+    fn default() -> Self {
+        Self("https://huggingface.co".into())
+    }
+}
+impl DownloadSource {
+    /// Accept only a bare HTTPS origin, with no credentials, path, query or fragment.
+    pub fn parse(input: &str) -> anyhow::Result<Self> {
+        ensure!(
+            input.len() <= 2048 && !input.chars().any(char::is_control),
+            "下载源地址无效"
+        );
+        let url = reqwest::Url::parse(input.trim())
+            .map_err(|_| anyhow::anyhow!("下载源必须是 HTTPS 站点地址"))?;
+        ensure!(
+            url.scheme() == "https"
+                && url.host_str().is_some()
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.path() == "/"
+                && url.query().is_none()
+                && url.fragment().is_none(),
+            "下载源仅支持 HTTPS 站点地址，不能包含凭据、路径或查询参数"
+        );
+        Ok(Self(url.origin().ascii_serialization()))
+    }
+    /// Canonical endpoint displayed before explicit installation.
+    pub fn origin(&self) -> &str {
+        &self.0
+    }
+    fn file_url(&self, model: &Model, file: &ModelFile) -> String {
+        format!(
+            "{}/{}/resolve/{}/{}",
+            self.0, model.repository, model.revision, file.path
+        )
+    }
+    fn allows_redirect(&self, url: &reqwest::Url) -> bool {
+        let host = url.host_str().unwrap_or("");
+        url.scheme() == "https"
+            && url.username().is_empty()
+            && url.password().is_none()
+            && (url.origin().ascii_serialization() == self.0
+                || host == "huggingface.co"
+                || host.ends_with(".huggingface.co")
+                || host.ends_with(".hf.co"))
+    }
+}
+
 /// Explicit model installation; drop cancels without blocking the GUI.
 pub struct Download {
     shared: Arc<Shared>,
@@ -362,6 +413,15 @@ impl Download {
         model: Model,
         root: PathBuf,
         allow_network: bool,
+    ) -> anyhow::Result<Self> {
+        Self::start_with_source(model, root, allow_network, DownloadSource::default())
+    }
+    /// Download from an explicitly chosen endpoint without changing revision or integrity checks.
+    pub fn start_with_source(
+        model: Model,
+        root: PathBuf,
+        allow_network: bool,
+        source: DownloadSource,
     ) -> anyhow::Result<Self> {
         model.validate()?;
         ensure!(root.is_absolute(), "模型目录必须为绝对路径");
@@ -386,6 +446,7 @@ impl Download {
                     &state,
                     None,
                     allow_network,
+                    &source,
                 ));
                 if let Ok(mut snapshot) = state.snapshot.lock() {
                     snapshot.finished = true;
@@ -451,18 +512,13 @@ fn valid_file(path: &Path, file: &ModelFile, shared: &Shared) -> anyhow::Result<
     }
     Ok(format!("{:x}", hash.finalize()).eq_ignore_ascii_case(&file.sha256))
 }
-fn http_client() -> anyhow::Result<reqwest::Client> {
+fn http_client(source: &DownloadSource) -> anyhow::Result<reqwest::Client> {
     if rustls::crypto::CryptoProvider::get_default().is_none() {
         let _ = rustls::crypto::ring::default_provider().install_default();
     }
-    let redirect = reqwest::redirect::Policy::custom(|attempt| {
-        let host = attempt.url().host_str().unwrap_or("");
-        if attempt.previous().len() >= 5
-            || attempt.url().scheme() != "https"
-            || !(host == "huggingface.co"
-                || host.ends_with(".huggingface.co")
-                || host.ends_with(".hf.co"))
-        {
+    let source = source.clone();
+    let redirect = reqwest::redirect::Policy::custom(move |attempt| {
+        if attempt.previous().len() >= 5 || !source.allows_redirect(attempt.url()) {
             attempt.error("模型下载重定向目标不受支持")
         } else {
             attempt.follow()
@@ -482,20 +538,22 @@ async fn install_with_cancel(
     shared: &Shared,
     test_origin: Option<&str>,
     allow_network: bool,
+    source: &DownloadSource,
 ) -> anyhow::Result<PathBuf> {
-    let install = install(model, root, shared, test_origin, allow_network);
+    let install = install_from_source(model, root, shared, test_origin, allow_network, source);
     tokio::pin!(install);
     tokio::select! {
         result = &mut install => if shared.cancelled() { Err(anyhow::anyhow!("下载已取消")) } else { result },
         _ = async { while !shared.cancelled() { tokio::time::sleep(Duration::from_millis(25)).await; } } => Err(anyhow::anyhow!("下载已取消")),
     }
 }
-async fn install(
+async fn install_from_source(
     model: &Model,
     root: &Path,
     shared: &Shared,
     test_origin: Option<&str>,
     allow_network: bool,
+    source: &DownloadSource,
 ) -> anyhow::Result<PathBuf> {
     model.validate()?;
     let manifest = model.manifest_path(root);
@@ -524,7 +582,7 @@ async fn install(
             fs::remove_file(entry.path())?;
         }
     }
-    let client = http_client()?;
+    let client = http_client(source)?;
     let mut completed = 0;
     for file in &model.files {
         ensure!(!shared.cancelled(), "下载已取消");
@@ -570,10 +628,7 @@ async fn install(
         );
         let url = match test_origin {
             Some(origin) => format!("{origin}/{}", file.path),
-            None => format!(
-                "https://huggingface.co/{}/resolve/{}/{}",
-                model.repository, model.revision, file.path
-            ),
+            None => source.file_url(model, file),
         };
         let mut request = client
             .get(url)
@@ -709,6 +764,25 @@ fn manifest_text(model: &Model) -> anyhow::Result<String> {
         table.insert(key.into(), toml::Value::Table(artifact));
     }
     Ok(toml::to_string(&table)?)
+}
+
+#[cfg(test)]
+async fn install(
+    model: &Model,
+    root: &Path,
+    shared: &Shared,
+    test_origin: Option<&str>,
+    allow_network: bool,
+) -> anyhow::Result<PathBuf> {
+    install_from_source(
+        model,
+        root,
+        shared,
+        test_origin,
+        allow_network,
+        &DownloadSource::default(),
+    )
+    .await
 }
 
 #[cfg(test)]

@@ -15,6 +15,26 @@ impl ControlView {
                 "安装、校验和选用本地模型。开始识别仍需前往语音服务。",
                 cx,
             ))
+            .child(Input::new(&self.model_search).id("model-search").aria_label("搜索模型"))
+            .child(self.render_choice(Choice::ModelLanguage, "筛选语言", false, cx))
+            .child(self.render_choice(Choice::ModelMode, "筛选模式", false, cx))
+            .child(help(format!("符合条件：识别 {} / 翻译 {}；当前所选模型始终保留，筛选不自动切换模型。",
+                session.local_models.catalog.iter().filter(|m| session.model_filter.matches(m)).count(),
+                session.translation_models.catalog.iter().filter(|m| session.model_filter.matches(m)).count()), cx))
+            .child(help("选用建议：中英低延迟优先原生 Zipformer；日语目前使用 SenseVoice 句末识别或 Whisper 分块。显存紧张选 Qwen 0.5B，1.5B 需要更多内存。建议不是质量排名，仍须按实际语料比较。", cx))
+            .child(section("下载源", "修改只影响显式安装；固定版本和 SHA-256 校验不变，不会自动回退其他站点。", cx))
+            .child(Input::new(&self.download_origin).id("download-origin").aria_label("模型下载源").disabled(busy))
+            .child({
+                let input = self.download_origin.clone();
+                let owner = self.session.clone();
+                Button::new("apply-download-origin").label("应用下载源").disabled(busy)
+                    .on_click(move |_,_,cx| {
+                        let value = input.read(cx).value().to_string();
+                        owner.update(cx,|s,cx|s.set_download_source(&value,cx));
+                    })
+            })
+            .child(help(format!("当前下载端点：{}", if session.local_models.source_error { "设置无效，已暂停联网安装" } else { session.local_models.source.origin() }), cx))
+            .child(help("自定义地址仅支持 HTTPS 站点根地址；不含音频或字幕，仅请求公开权重。离线模式仍禁止联网。", cx))
             .child(section(
                 "语音识别",
                 "选择适合源语言的模型；安装前查看来源、许可证和所需空间。",
@@ -251,18 +271,67 @@ impl ControlView {
                 .child(self.render_choice(Choice::WhisperBlock, "Whisper 分块", busy, cx))
                 .child(help("短块更快显示字幕，可能切断词句；长块保留更多上下文。CUDA 需要专用构建，失败不会自动回退。", cx));
         }
-        view
-            .when(installing, |view| view.child(
-                Progress::new("asr-model-progress").small().accessibility_label("识别模型下载进度")
+        view.when(installing, |view| {
+            view.child(
+                Progress::new("asr-model-progress")
+                    .small()
+                    .accessibility_label("识别模型下载进度")
                     .loading(models.snapshot.total == 0)
-                    .value(models.snapshot.completed as f32 / models.snapshot.total.max(1) as f32 * 100.)))
-            .child(row()
-                .child(button("install-model", "安装并选用", &self.session, Session::install_local_model).disabled(busy || models.current().is_none()))
-                .child(button("cancel-model", "取消下载", &self.session, Session::cancel_model_install).disabled(!installing))
-                .child(button("import-model", "导入已有模型…", &self.session, Session::import_model).disabled(busy)))
-            .child(help("安装会从 Hugging Face 下载模型文件，不上传音频。已下载文件校验后复用；安装不自动开始识别。", cx))
-            .child(help(format!("{} · {:.1} / {:.1} MB", models.snapshot.status, models.snapshot.completed as f64 / 1_000_000., models.snapshot.total as f64 / 1_000_000.), cx))
-            .child(help(session.model_info.clone(), cx))
-            .when_some(models.snapshot.available_bytes, |view, bytes| view.child(help(format!("模型磁盘可用：{:.2} GiB", bytes as f64 / 1_073_741_824.), cx)))
+                    .value(
+                        models.snapshot.completed as f32 / models.snapshot.total.max(1) as f32
+                            * 100.,
+                    ),
+            )
+        })
+        .child(
+            row()
+                .child(
+                    button(
+                        "install-model",
+                        "安装并选用",
+                        &self.session,
+                        Session::install_local_model,
+                    )
+                    .disabled(busy || models.current().is_none()),
+                )
+                .child(
+                    button(
+                        "cancel-model",
+                        "取消下载",
+                        &self.session,
+                        Session::cancel_model_install,
+                    )
+                    .disabled(!installing),
+                )
+                .child(
+                    button(
+                        "import-model",
+                        "导入已有模型…",
+                        &self.session,
+                        Session::import_model,
+                    )
+                    .disabled(busy),
+                ),
+        )
+        .child(help(
+            "安装使用上方显示的下载端点，不上传音频。已下载文件校验后复用；安装不自动开始识别。",
+            cx,
+        ))
+        .child(help(
+            format!(
+                "{} · {:.1} / {:.1} MB",
+                models.snapshot.status,
+                models.snapshot.completed as f64 / 1_000_000.,
+                models.snapshot.total as f64 / 1_000_000.
+            ),
+            cx,
+        ))
+        .child(help(session.model_info.clone(), cx))
+        .when_some(models.snapshot.available_bytes, |view, bytes| {
+            view.child(help(
+                format!("模型磁盘可用：{:.2} GiB", bytes as f64 / 1_073_741_824.),
+                cx,
+            ))
+        })
     }
 }

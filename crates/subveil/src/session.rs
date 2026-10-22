@@ -65,6 +65,7 @@ pub struct Session {
     streaming_scheduler: subveil_translate::StreamingTranslationScheduler,
     pub model_info: String,
     pub local_models: crate::models::LocalModels,
+    pub model_filter: crate::models::Filter,
     pub vad_models: crate::models::LocalModels,
     pub translation_models: crate::models::LocalModels,
     pub translation_model: Option<PathBuf>,
@@ -236,6 +237,24 @@ impl Session {
                 }
                 match preferences {
                     Ok(Some(preferences)) => {
+                        if !preferences.download_origin.is_empty() {
+                            match subveil_asr::models::DownloadSource::parse(
+                                &preferences.download_origin,
+                            ) {
+                                Ok(source) => {
+                                    session.local_models.source = source.clone();
+                                    session.translation_models.source = source.clone();
+                                    session.vad_models.source = source;
+                                }
+                                Err(_) => {
+                                    session.local_models.source_error = true;
+                                    session.translation_models.source_error = true;
+                                    session.vad_models.source_error = true;
+                                    session.message =
+                                        "保存的下载源无效，已暂停联网安装；请重新应用地址".into();
+                                }
+                            }
+                        }
                         if let Some(source) = &preferences.capture_source
                             && let Ok(source) = source.source()
                         {
@@ -329,6 +348,7 @@ impl Session {
         timer: Task<()>,
     ) -> Self {
         Self {
+            model_filter: Default::default(),
             tray_service: None,
             shortcuts_service: None,
             tray_status: "托盘未启用".into(),
@@ -1244,6 +1264,11 @@ impl Session {
         if self.saving_local || self.restoring_local {
             return;
         }
+        if self.local_models.source_error {
+            self.message = "下载源设置无效；请显式应用有效地址再保存".into();
+            cx.notify();
+            return;
+        }
         self.refresh_profile_metadata();
         let Some(path) = self
             .config_path
@@ -1267,6 +1292,7 @@ impl Session {
             }
         };
         let preferences = storage::LocalPreferences {
+            download_origin: self.local_models.source.origin().into(),
             profiles: self.profiles.clone(),
             selected_profile: self.selected_profile,
             capture_source: match &self.capture_target {
