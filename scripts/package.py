@@ -42,6 +42,7 @@ def main():
         for filename in names:
             shutil.copy2(source / filename, binary / filename)
             subprocess.run(["strip", str(binary / filename)], check=True)
+        (binary / "bundle-backend").write_text(flavor + "\n")
         # Check exact version, build ID, protocol and compiled backends without
         # starting a display, loading weights or touching user credentials.
         subprocess.run([str(binary / "subveil"), "--check-installation"], check=True)

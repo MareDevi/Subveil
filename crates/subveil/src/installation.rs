@@ -57,6 +57,12 @@ fn probe(path: &Path, helper: &str, backend: &str) -> anyhow::Result<()> {
 pub fn check() -> anyhow::Result<()> {
     let exe = std::env::current_exe()?;
     let directory = exe.parent().context("应用目录无效")?;
+    let mut declaration = Vec::new();
+    std::fs::File::open(directory.join("bundle-backend"))
+        .context("缺少安装包后端声明；请重装完整程序目录")?
+        .take(17)
+        .read_to_end(&mut declaration)?;
+    let requires_cuda = bundle_cuda(&declaration)?;
     for (name, helper, backend) in [
         ("subveil-inference", "translation", "cpu"),
         ("subveil-whisper", "whisper", "cpu"),
@@ -71,7 +77,11 @@ pub fn check() -> anyhow::Result<()> {
         "subveil-whisper-cuda{}",
         std::env::consts::EXE_SUFFIX
     ));
-    if cuda.exists() {
+    ensure!(
+        requires_cuda || !cuda.exists(),
+        "CPU 安装包混入 CUDA helper；请重装完整目录"
+    );
+    if requires_cuda {
         probe(&cuda, "whisper", "cuda")?;
     }
     println!(
@@ -79,4 +89,26 @@ pub fn check() -> anyhow::Result<()> {
         env!("CARGO_PKG_VERSION")
     );
     Ok(())
+}
+
+fn bundle_cuda(declaration: &[u8]) -> anyhow::Result<bool> {
+    match declaration {
+        b"cpu\n" => Ok(false),
+        b"cuda\n" => Ok(true),
+        _ => anyhow::bail!("安装包后端声明无效；请重装完整程序目录"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn bundle_roles_are_explicit_and_never_inferred_from_missing_helpers() -> anyhow::Result<()> {
+        assert!(!bundle_cuda(b"cpu\n")?);
+        assert!(bundle_cuda(b"cuda\n")?);
+        for invalid in [b"".as_slice(), b"cpu,cuda\n", b"CUDA\n", b"unknown\n"] {
+            assert!(bundle_cuda(invalid).is_err());
+        }
+        Ok(())
+    }
 }
