@@ -14,6 +14,7 @@ use crate::{
 };
 mod archives;
 mod configuration;
+mod displays;
 mod model_operations;
 mod profiles;
 pub(crate) use configuration::Choice;
@@ -29,6 +30,10 @@ pub struct Session {
     pub config_error: Option<String>,
     pub config_path: Option<PathBuf>,
     pub saving: bool,
+    pub tray_service: Option<crate::desktop::Service>,
+    pub shortcuts_service: Option<crate::desktop::Service>,
+    pub tray_status: String,
+    pub shortcuts_status: String,
     pub audio: subveil_audio::Snapshot,
     pub audio_sources: Vec<subveil_audio::Source>,
     pub capture_target: subveil_audio::CaptureTarget,
@@ -76,6 +81,8 @@ pub struct Session {
     pub audio_stopping: bool,
     overlay: Option<WindowHandle<OverlayView>>,
     overlay_requested: bool,
+    outputs: Vec<displays::Output>,
+    _display_subscription: Option<gpui_kit::Subscription>,
     control: Option<WindowHandle<Root>>,
     recovery: Option<WindowHandle<Root>>,
     started: Instant,
@@ -310,7 +317,9 @@ impl Session {
             });
         })
         .detach();
-        Self::initial(settings, config_path, config_error, timer)
+        let mut session = Self::initial(settings, config_path, config_error, timer);
+        session.watch_outputs(cx);
+        session
     }
 
     pub(crate) fn initial(
@@ -320,6 +329,10 @@ impl Session {
         timer: Task<()>,
     ) -> Self {
         Self {
+            tray_service: None,
+            shortcuts_service: None,
+            tray_status: "托盘未启用".into(),
+            shortcuts_status: "全局快捷键未启用".into(),
             archive: None,
             archive_busy: false,
             archive_status: "记录默认只在内存；保存或导出会把原文和译文写入所选文件".into(),
@@ -383,6 +396,8 @@ impl Session {
             audio_stopping: false,
             overlay: None,
             overlay_requested: false,
+            outputs: Vec::new(),
+            _display_subscription: None,
             control: None,
             recovery: None,
             started: Instant::now(),
@@ -394,6 +409,7 @@ impl Session {
     }
 
     fn tick(&mut self, cx: &mut Context<Self>) {
+        self.poll_desktop(cx);
         let now = Instant::now();
         let now_ms = self.started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
         let mut changed = self.subtitles.expire(now_ms);
@@ -1295,8 +1311,8 @@ impl Session {
         .detach();
     }
 
-    pub fn overlay_visible(&self) -> bool {
-        self.overlay.is_some()
+    pub fn overlay_enabled(&self) -> bool {
+        self.overlay_requested
     }
 
     pub fn toggle_overlay(&mut self, cx: &mut Context<Self>) {
@@ -1334,7 +1350,7 @@ impl Session {
                 match result {
                     Ok(window) => session.overlay = Some(window),
                     Err(error) => {
-                        session.overlay_requested = false;
+                        // Keep user intent so a reconnected output can restore the surface.
                         session.message = format!("无法显示字幕浮窗：{error:#}");
                         tracing::error!(?error, "cannot open subtitle overlay");
                     }
@@ -1356,7 +1372,7 @@ impl Session {
         } else {
             self.settings = settings;
             self.message = "样式已应用；点击「保存样式」持久化。".into();
-            if self.overlay.is_some() {
+            if self.overlay_requested {
                 self.close_overlay(cx);
                 self.show_overlay(cx);
             }
@@ -1459,8 +1475,18 @@ impl Session {
             cx.quit();
         } else if self.overlay.is_some_and(|handle| handle.window_id() == id) {
             self.overlay = None;
-            self.overlay_requested = false;
-            self.message = "字幕窗口已被 compositor 关闭，可点击「显示浮窗」重建。".into();
+            let missing = self.settings.output_uuid.as_ref().is_some_and(|uuid| {
+                !cx.displays()
+                    .iter()
+                    .any(|d| d.uuid().is_ok_and(|id| id.to_string() == *uuid))
+            }) || cx.displays().is_empty();
+            self.overlay_requested = missing;
+            self.message = if missing {
+                "所选屏幕已断开；浮窗暂停，重连后恢复。"
+            } else {
+                "字幕窗口已被 compositor 关闭，可点击「显示浮窗」重建。"
+            }
+            .into();
             cx.notify();
         }
     }

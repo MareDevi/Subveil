@@ -3,6 +3,7 @@ use super::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Choice {
+    Output,
     Profile,
     SourceLanguage,
     TargetLanguage,
@@ -13,7 +14,8 @@ pub(crate) enum Choice {
     WhisperBlock,
 }
 impl Choice {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
+        Self::Output,
         Self::Profile,
         Self::SourceLanguage,
         Self::TargetLanguage,
@@ -39,6 +41,7 @@ impl Session {
     }
     pub fn choice_options(&self, choice: Choice) -> Vec<String> {
         match choice {
+            Choice::Output => self.output_labels(),
             Choice::Profile => self.profiles.iter().map(|p| p.name.clone()).collect(),
             Choice::SourceLanguage => {
                 if self.asr_config.provider == subveil_asr::Provider::Local {
@@ -95,6 +98,7 @@ impl Session {
     }
     pub fn choice_value(&self, choice: Choice) -> String {
         match choice {
+            Choice::Output => self.output_value(),
             Choice::Profile => self
                 .profiles
                 .iter()
@@ -130,6 +134,10 @@ impl Session {
         }
     }
     pub fn select_choice(&mut self, choice: Choice, value: &str, cx: &mut Context<Self>) {
+        if choice == Choice::Output {
+            self.select_output(value, cx);
+            return;
+        }
         if self.configuration_busy() || !self.choice_options(choice).iter().any(|v| v == value) {
             return;
         }

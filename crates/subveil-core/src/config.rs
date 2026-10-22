@@ -20,6 +20,8 @@ pub enum DisplayMode {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct OverlaySettings {
+    /// Preferred output UUID. None follows the first output in layout order.
+    pub output_uuid: Option<String>,
     /// Font family; missing installed glyphs use the platform fallback.
     pub font_family: String,
     /// Translation font size in logical pixels.
@@ -53,6 +55,7 @@ pub struct OverlaySettings {
 impl Default for OverlaySettings {
     fn default() -> Self {
         Self {
+            output_uuid: None,
             font_family: "sans-serif".into(),
             font_size: 32.,
             source_ratio: 0.75,
@@ -112,6 +115,18 @@ impl OverlaySettings {
                 return Err(ConfigError::Invalid(name));
             }
         }
+        if self.output_uuid.as_ref().is_some_and(|id| {
+            id.len() != 36
+                || !id.bytes().enumerate().all(|(i, b)| {
+                    if matches!(i, 8 | 13 | 18 | 23) {
+                        b == b'-'
+                    } else {
+                        b.is_ascii_hexdigit()
+                    }
+                })
+        }) {
+            return Err(ConfigError::Invalid("output_uuid"));
+        }
         if self.font_family.trim().is_empty() || self.font_family.len() > 128 {
             return Err(ConfigError::Invalid("font_family (1..128 bytes)"));
         }
@@ -145,6 +160,7 @@ mod tests {
     #[test]
     fn settings_round_trip_preserves_custom_values() -> Result<(), ConfigError> {
         let settings = OverlaySettings {
+            output_uuid: Some("12345678-1234-1234-1234-123456789abc".into()),
             font_family: "Noto Sans CJK SC".into(),
             background_opacity: 0.,
             display_mode: DisplayMode::Translation,
@@ -172,6 +188,7 @@ mod tests {
             "history_limit = 999999",
             "translation_color = 16777216",
             "widht = 900",
+            "output_uuid = 'wrong'",
         ] {
             assert!(OverlaySettings::from_toml(text).is_err(), "accepted {text}");
         }

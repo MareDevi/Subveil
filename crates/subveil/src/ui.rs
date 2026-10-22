@@ -627,7 +627,7 @@ impl ControlView {
 impl Render for ControlView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let session = self.session.read(cx);
-        let overlay = session.overlay_visible();
+        let overlay = session.overlay_enabled();
         let message = session.message.clone();
         let error = session.config_error.clone();
         let state = if session.asr_stopping || session.audio_stopping {

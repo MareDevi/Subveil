@@ -122,19 +122,31 @@ pub fn open(
             .is_some_and(|environment| environment.wayland_display.is_some()),
         "字幕浮窗需要原生 Wayland 会话和 zwlr_layer_shell_v1 协议；当前后端不支持"
     );
-    // Wayland has no primary-output concept; this GPUI backend always returns None.
-    // Use the first output in layout order until explicit monitor selection arrives in M06.
-    let display = cx
-        .displays()
-        .into_iter()
-        .min_by(|left, right| {
-            let left = left.bounds().origin;
-            let right = right.bounds().origin;
-            f32::from(left.x)
-                .total_cmp(&f32::from(right.x))
-                .then_with(|| f32::from(left.y).total_cmp(&f32::from(right.y)))
-        })
-        .context("no display is available for the subtitle overlay")?;
+    let displays = cx.displays();
+    let display = if let Some(uuid) = &settings.output_uuid {
+        let matches: Vec<_> = displays
+            .into_iter()
+            .filter(|d| d.uuid().is_ok_and(|id| id.to_string() == *uuid))
+            .collect();
+        ensure!(
+            matches.len() == 1,
+            "所选屏幕已断开或标识不唯一；浮窗已暂停，请重新选择屏幕"
+        );
+        matches.into_iter().next().context("所选屏幕不可用")?
+    } else {
+        displays
+            .into_iter()
+            .min_by(|left, right| {
+                let left = left.bounds().origin;
+                let right = right.bounds().origin;
+                f32::from(left.x)
+                    .total_cmp(&f32::from(right.x))
+                    .then_with(|| f32::from(left.y).total_cmp(&f32::from(right.y)))
+            })
+            .context("没有可用屏幕；浮窗已暂停")?
+    };
+    let output_uuid = display.uuid().ok();
+    tracing::debug!(?output_uuid, "opening subtitle overlay on selected output");
     let bounds = display.bounds();
     let width = settings
         .width

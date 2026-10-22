@@ -119,6 +119,11 @@ impl ControlView {
                 "调整背景和位置；预览与桌面字幕共用显示样式。",
                 cx,
             ))
+            .child(self.render_choice(Choice::Output, "显示屏幕", false, cx))
+            .child(help(
+                "自动选择按桌面位置排序；固定屏幕断开时暂停浮窗，重连后恢复。",
+                cx,
+            ))
             .child(field(
                 "背景不透明度",
                 row()
@@ -213,6 +218,40 @@ impl ControlView {
             )
             .child(help(
                 "浮窗宽度受显示器限制；Layer Shell 与鼠标穿透能力取决于 Wayland compositor。",
+                cx,
+            ))
+            .child(section(
+                "桌面入口",
+                "按需启用；快捷键由桌面 Portal 请求授权，每次启动重新启用。",
+                cx,
+            ))
+            .child(
+                row()
+                    .child(button(
+                        "toggle-tray",
+                        if session.tray_service.is_some() {
+                            "停用托盘"
+                        } else {
+                            "启用托盘"
+                        },
+                        &self.session,
+                        |s, cx| s.toggle_desktop_service(false, cx),
+                    ))
+                    .child(button(
+                        "toggle-global-shortcuts",
+                        if session.shortcuts_service.is_some() {
+                            "停用全局快捷键"
+                        } else {
+                            "启用全局快捷键…"
+                        },
+                        &self.session,
+                        |s, cx| s.toggle_desktop_service(true, cx),
+                    )),
+            )
+            .child(help(session.tray_status.clone(), cx))
+            .child(help(session.shortcuts_status.clone(), cx))
+            .child(help(
+                "快捷键仅恢复窗口、显隐字幕或停止会话。桌面不支持托盘时，保留原生恢复窗口。",
                 cx,
             ))
             .child(

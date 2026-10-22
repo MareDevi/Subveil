@@ -159,3 +159,6 @@ Workspace 包含 `subveil` 应用、`subveil-core` 核心状态与推理协议�
 必须使用 Conventional Commits，按可审查的小步勤提交。项目许可证待所有者确认，尚未授予开源许可证。
 
 字幕寿命、阅读调度和 SenseVoice 消费隔离的策略与验收见 [字幕可靠性](docs/subtitle-reliability.md)。
+
+
+字幕样式页可固定选择输出屏幕；屏幕断开时浮窗暂停，重连后恢复。可按需启用 Linux SNI 托盘和 Portal 全局快捷键。快捷键需桌面授权，不能启动采集或上传。`mise exec -- target/debug/subveil --check-desktop` 只检查桌面服务，不绑定快捷键。实际支持和验收边界见 [整改台账](docs/competitive-remediation-plan.md)。

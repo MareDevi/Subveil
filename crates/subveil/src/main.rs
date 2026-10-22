@@ -1,5 +1,6 @@
 mod archive;
 mod credentials;
+mod desktop;
 mod installation;
 mod mock;
 mod models;
@@ -21,6 +22,7 @@ struct Arguments {
     demo: bool,
     models: bool,
     check_installation: bool,
+    check_desktop: bool,
     config: Option<PathBuf>,
 }
 
@@ -29,6 +31,7 @@ fn arguments() -> anyhow::Result<Option<Arguments>> {
     let mut args = env::args_os().skip(1);
     while let Some(argument) = args.next() {
         match argument.to_str() {
+            Some("--check-desktop") => parsed.check_desktop = true,
             Some("--demo") => parsed.demo = true,
             Some("--models") => parsed.models = true,
             Some("--check-installation") => parsed.check_installation = true,
@@ -37,7 +40,7 @@ fn arguments() -> anyhow::Result<Option<Arguments>> {
             }
             Some("--help" | "-h") => {
                 println!(
-                    "Subveil {}\n\nUsage: subveil [--demo] [--models] [--config PATH] [--check-installation]\n\n  --demo         Start the offline mock subtitle demonstration\n  --models       Open local model selection without capture or download\n  --config PATH  Read/write subtitle styles at PATH\n  --check-installation  Verify bundled helper versions without opening GUI\n  --version      Print application version\n  --help         Print this help",
+                    "Subveil {}\n\nUsage: subveil [--demo] [--models] [--config PATH] [--check-installation] [--check-desktop]\n\n  --demo         Start the offline mock subtitle demonstration\n  --models       Open local model selection without capture or download\n  --config PATH  Read/write subtitle styles at PATH\n  --check-installation  Verify bundled helper versions without opening GUI\n  --check-desktop  Probe tray/portal availability without binding shortcuts\n  --version      Print application version\n  --help         Print this help",
                     env!("CARGO_PKG_VERSION")
                 );
                 return Ok(None);
@@ -59,6 +62,9 @@ fn main() -> anyhow::Result<()> {
     let Some(arguments) = arguments()? else {
         return Ok(());
     };
+    if arguments.check_desktop {
+        return desktop::check();
+    }
     if arguments.check_installation {
         return installation::check();
     }
