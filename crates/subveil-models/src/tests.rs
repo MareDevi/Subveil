@@ -65,7 +65,7 @@ fn server(
 #[test]
 fn curated_catalog_has_pinned_hashes_and_preserves_backend_semantics() -> anyhow::Result<()> {
     let models = catalog()?;
-    assert_eq!(models.len(), 8);
+    assert_eq!(models.len(), 9);
     for model in models {
         let dir = root();
         fs::create_dir_all(&dir)?;
@@ -193,7 +193,10 @@ fn translation_weights_are_verified_and_asr_manifests_are_rejected() -> anyhow::
         fs::write(root.join(&file.path), b"test")?;
     }
     fs::write(&path, manifest_text(&model)?)?;
-    assert!(verified_translation_model(&path).is_ok());
+    assert_eq!(verified_translation(&path)?.1, ModelKind::QwenTranslation);
+    model.kind = ModelKind::HyMtTranslation;
+    fs::write(&path, manifest_text(&model)?)?;
+    assert_eq!(verified_translation(&path)?.1, ModelKind::HyMtTranslation);
     fs::write(root.join(&model.files[0].path), b"evil")?;
     assert!(verified_translation_model(&path).is_err());
     fs::write(&path, manifest_text(&fixture()?)?)?;

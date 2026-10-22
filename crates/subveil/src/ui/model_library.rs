@@ -73,7 +73,7 @@ impl ControlView {
             .child(help("Fujie Japanese Streaming Zipformer：原生 RNN-T，320 ms 块；输出假名与标记。CC BY 4.0；本轮下载元数据返回 401，未实测。", cx))
             .child(Link::new("candidate-ja-zipformer").href("https://huggingface.co/fujie/sherpa_onnx_asr_csj_cejc_pron_comp_zipformer_stream_c320_la0").child("日语流式模型卡"))
             .child(help("Vosk：连续识别，需新增运行时与质量对照。NeMo Streaming FastConformer：需缓存式运行时。Qwen3-ASR：须按具体实现验证缓存复用。", cx))
-            .child(help("HY-MT1.5、MarianMT / OPUS-MT、NLLB、M2M100：需专用运行时或提示词适配，不等于原生同时翻译。SeamlessStreaming：端到端研究项，CC BY-NC 4.0，不作为默认后端。", cx))
+            .child(help("MarianMT / OPUS-MT、NLLB、M2M100：需专用运行时或提示词适配，不等于原生同时翻译。SeamlessStreaming：端到端研究项，CC BY-NC 4.0，不作为默认后端。", cx))
             .child(
                 button(
                     "save-model-settings",
@@ -143,19 +143,19 @@ impl ControlView {
         })
         .child(
             row()
-                .child(
-                    button(
-                        "install-translation",
-                        if session.offline {
+                .child({
+                    let owner = self.session.clone();
+                    Button::new("install-translation")
+                        .label(if session.offline {
                             "校验并选用本机翻译模型"
                         } else {
                             "安装并选用翻译模型"
-                        },
-                        &self.session,
-                        Session::install_translation_model,
-                    )
-                    .disabled(busy),
-                )
+                        })
+                        .disabled(busy)
+                        .on_click(move |_, window, cx| {
+                            owner.update(cx, |s, cx| s.confirm_translation_install(window, cx))
+                        })
+                })
                 .child(
                     button(
                         "cancel-translation",

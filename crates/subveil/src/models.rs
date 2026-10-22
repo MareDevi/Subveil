@@ -17,8 +17,7 @@ impl LocalModels {
     }
     pub fn for_translation(translation: bool) -> Self {
         Self::filtered(move |kind| {
-            kind != subveil_asr::ModelKind::SileroVad
-                && (kind == subveil_asr::ModelKind::QwenTranslation) == translation
+            kind != subveil_asr::ModelKind::SileroVad && kind.is_translation() == translation
         })
     }
     pub fn vad() -> Self {
@@ -143,7 +142,7 @@ impl Filter {
                     model.kind,
                     subveil_asr::ModelKind::SenseVoice | subveil_asr::ModelKind::Whisper
                 ),
-                "文字翻译" => model.kind == subveil_asr::ModelKind::QwenTranslation,
+                "文字翻译" => model.kind.is_translation(),
                 _ => true,
             }
             && (self.query.trim().is_empty()

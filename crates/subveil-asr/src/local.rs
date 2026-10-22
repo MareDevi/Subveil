@@ -79,7 +79,7 @@ impl Manifest {
                     && manifest.sample_rate == 16000,
                 "SenseVoice 需要 16 kHz 模型与 tokens"
             ),
-            ModelKind::QwenTranslation => ensure!(
+            ModelKind::QwenTranslation | ModelKind::HyMtTranslation => ensure!(
                 manifest.model.is_some()
                     && manifest.encoder.is_none()
                     && manifest.decoder.is_none()
@@ -97,8 +97,7 @@ impl Manifest {
             ),
         }
         ensure!(
-            manifest.kind == ModelKind::QwenTranslation
-                || (8_000..=48_000).contains(&manifest.sample_rate),
+            manifest.kind.is_translation() || (8_000..=48_000).contains(&manifest.sample_rate),
             "模型采样率无效"
         );
         ensure!(
@@ -202,7 +201,7 @@ pub(crate) fn run(
     shared.status("校验并加载本地模型…", frames, false);
     let manifest = Manifest::read(path)?;
     ensure!(
-        manifest.kind != ModelKind::QwenTranslation,
+        !manifest.kind.is_translation(),
         "文字翻译模型不能用于语音识别"
     );
     ensure!(

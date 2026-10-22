@@ -166,7 +166,7 @@ sha256 = "fa1fede7f775a20f111cc098c00900092020572ce78976970a5b0ad9ca211999"
 [[models]]
 id = "silero-vad"
 name = "Silero VAD"
-summary = "可选神经语音检测；CPU、16 kHz。比能量阈值更能区分语音与背景声音，仍需按实际内容核对。安装后在模型库启用；不上传音频。"
+summary = "可选神经语音检测；CPU、16 kHz。用于语音与背景声音的模型判别；部分语料可能较能量检测更差，需按实际内容对照。安装后在模型库启用；不上传音频。"
 repository = "csukuangfj/vad"
 revision = "fba88cd2e921609e7675c3aaf51e0b9b295da4bc"
 kind = "silero_vad"
@@ -178,3 +178,28 @@ license_url = "https://github.com/snakers4/silero-vad/blob/master/LICENSE"
 path = "silero_vad.onnx"
 size = 1807522
 sha256 = "a35ebf52fd3ce5f1469b2a36158dba761bc47b973ea3382b3186ca15b1f5af28"
+
+
+[[models]]
+id = "hy-mt1.5-1.8b-translation-q4"
+name = "HY-MT1.5 1.8B Q4_K_M"
+summary = "腾讯专用文字翻译；CPU / Vulkan，约 1.13 GB 权重。自定义许可排除欧盟、英国及韩国，使用须符合完整条款；请先阅读并确认。片段翻译，不是原生同时翻译；需按语料核对。"
+repository = "tencent/HY-MT1.5-1.8B-GGUF"
+revision = "265b2e615a7dc9b06c435dc878829ad99a512ba2"
+kind = "hy_mt_translation"
+sample_rate = 0
+languages = ["en", "ja", "zh"]
+license = "Tencent HY Community License"
+license_url = "https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF/blob/265b2e615a7dc9b06c435dc878829ad99a512ba2/License.txt"
+[[models.files]]
+path = "HY-MT1.5-1.8B-Q4_K_M.gguf"
+size = 1133080512
+sha256 = "4383ac0c3c8e476de98ff979c2a3f069f8c4fb385e7860cf2d28da896cc477c7"
+[[models.files]]
+path = "README.md"
+size = 8088
+sha256 = "a0bb039b004b8fa225ce1db982137ccc80c70cf4ebf122f519cf5ec48cb4cf98"
+[[models.files]]
+path = "License.txt"
+size = 16270
+sha256 = "d7d9db858500ac9073f4b5decef8e208454357226f535f65079ce4376047569f"

@@ -87,6 +87,13 @@ DeepL 配置：
 
 Final 始终重新翻译以纠正临时结果；仅 Final 源句进入云端文字翻译的最多三句上下文。本地后端不维护该历史。HTTP worker 可取消被新请求取代的工作；本地 worker 跳过过时排队请求，原生推理中的任务仍须等待当前推理返回，其结果再过状态检查。所有队列保持有界。
 
-新增研究候选仅供查看，不能安装或启动：日语 Fujie Streaming Zipformer（CC BY 4.0，假名及标记输出，下载元数据本轮 401）、Vosk、缓存式 NeMo FastConformer、Qwen3-ASR、HY-MT1.5、MarianMT / OPUS-MT、NLLB、M2M100 与 SeamlessStreaming。后者 CC BY-NC 4.0，不作为默认后端。未接入的运行时、质量、设备性能与商业许可不能由目录展示推导。
+新增研究候选仅供查看，不能安装或启动：日语 Fujie Streaming Zipformer（CC BY 4.0，假名及标记输出，下载元数据本轮 401）、Vosk、缓存式 NeMo FastConformer、Qwen3-ASR、MarianMT / OPUS-MT、NLLB、M2M100 与 SeamlessStreaming。后者 CC BY-NC 4.0，不作为默认后端。未接入的运行时、质量、设备性能与商业许可不能由目录展示推导。
 
 可用 `mise run offline:probe -- ASR_MANIFEST TRANSLATION_MANIFEST WAV en cpu --incremental` 在公开 WAV 上验证请求提交、临时译文接收与 Final 纠正；不上传或打印文本。具体测量见 [本轮验收](cloud-streaming-validation.md)。
+
+
+## 2026-10-22 专用翻译补充
+
+HY-MT1.5 1.8B 已从研究项转为独立 `hy_mt_translation`，固定权重、README 与完整许可证同时校验。GUI 安装前显示腾讯自定义条款并要求明确确认，保留 Qwen 与 CPU/Vulkan 显式选择。仅中英日适配；用户自行导入需正确声明 family、来源和许可，不能把任意 GGUF 标为可运行。提示模板、取消、数字否定/术语及实际设备结果见 [HY-MT 验证](hy-mt-validation-2026-10-22.md)。
+
+Fujie 原生日语 streaming 的官方元数据仍为 401，继续保留研究项；没有可信文件大小/hash，不能安装或声称已接入。

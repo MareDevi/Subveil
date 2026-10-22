@@ -107,7 +107,7 @@ fn run() -> anyhow::Result<()> {
         args.len() == 2,
         "usage: subveil-inference MANIFEST cpu|GPU_INDEX"
     );
-    let path = subveil_models::verified_translation_model(std::path::Path::new(&args[0]))?;
+    let (path, family) = subveil_models::verified_translation(std::path::Path::new(&args[0]))?;
     let (params, label) = if args[1] == "cpu" {
         (
             LlamaModelParams::default()
@@ -153,6 +153,7 @@ fn run() -> anyhow::Result<()> {
     generate::infer(
         &model,
         &backend,
+        family,
         &warmup,
         Instant::now() + Duration::from_secs(20),
         &cancelled,
@@ -163,7 +164,7 @@ fn run() -> anyhow::Result<()> {
     for request in requests(cancelled.clone()) {
         let request = request?;
         let deadline = Instant::now() + Duration::from_millis(request.timeout_ms.min(30_000));
-        let result = generate::infer(&model, &backend, &request, deadline, &cancelled)
+        let result = generate::infer(&model, &backend, family, &request, deadline, &cancelled)
             .map_err(|error| error.to_string());
         send(&Output::Translation {
             id: request.id,

@@ -287,9 +287,7 @@ impl Session {
                         }
                         if let Some(path) = preferences.asr_model {
                             match metadata {
-                                Some(Ok(metadata))
-                                    if metadata.kind != subveil_asr::ModelKind::QwenTranslation =>
-                                {
+                                Some(Ok(metadata)) if !metadata.kind.is_translation() => {
                                     session.apply_local_model(path, metadata)
                                 }
                                 _ => {
@@ -1203,7 +1201,7 @@ impl Session {
     }
 
     fn apply_local_model(&mut self, path: PathBuf, metadata: subveil_asr::ModelMetadata) {
-        if metadata.kind == subveil_asr::ModelKind::QwenTranslation {
+        if metadata.kind.is_translation() {
             self.translation_model = Some(path);
             self.sync_translation_selection();
             self.translation_provider = subveil_translate::Provider::Local;

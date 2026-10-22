@@ -185,3 +185,47 @@ fn model_search_preserves_selection_and_endpoint_requires_explicit_apply(cx: &mu
         )
     });
 }
+
+#[gpui_kit::test]
+fn hy_mt_install_requires_terms_and_cancel_does_not_download(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        init(cx);
+    });
+    let (handle, session) = cx.update(|cx| {
+        let session = cx.new(|_| {
+            let mut s = Session::initial(Default::default(), None, None, Task::ready(()));
+            s.restoring_local = false;
+            s.translation_models.selected = s
+                .translation_models
+                .catalog
+                .iter()
+                .position(|m| m.kind == subveil_asr::ModelKind::HyMtTranslation)
+                .expect("HY-MT catalog");
+            s
+        });
+        let owner = session.clone();
+        let (handle, _) = gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| ControlView::new(owner, window, cx))
+        })
+        .expect("open view");
+        (handle, session)
+    });
+    cx.update_window(handle, |_, window, cx| {
+        session.update(cx, |s, cx| s.confirm_translation_install(window, cx));
+        assert!(!session.read(cx).translation_models.downloading());
+    })
+    .expect("request consent");
+    cx.run_until_parked();
+    assert!(cx.has_pending_prompt());
+    let (_, detail) = cx.pending_prompt().expect("terms prompt");
+    assert!(detail.contains("欧盟、英国及韩国"));
+    assert!(detail.contains("265b2e615a7dc9b06c435dc878829ad99a512ba2/License.txt"));
+    cx.simulate_prompt_answer("取消");
+    cx.run_until_parked();
+    cx.update(|cx| {
+        assert!(!session.read(cx).importing_model);
+        assert!(!session.read(cx).translation_models.downloading());
+        assert!(session.read(cx).translation_model.is_none());
+    });
+}

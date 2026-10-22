@@ -49,6 +49,6 @@ mise run offline:probe -- ASR_MANIFEST TRANSLATION_MANIFEST WAV en cpu --increme
 
 新增两个权重的发布元数据已核对，但本轮未下载权重或实测其速度、翻译质量、CPU / CUDA / Vulkan 推理。已有 Zipformer + Qwen1.5B 的 CPU 样本实测不代表新增模型或 GPU 验收。
 
-Fujie 日语 Streaming Zipformer 的模型卡可读，但 Hugging Face API 返回 401，缺少可信的文件校验元数据；未加入可安装目录，未实现其假名标记规范化，也未声称日语原生流式推理已可用。Vosk、NeMo、HY-MT、SeamlessStreaming 等仍为研究候选。
+Fujie 日语 Streaming Zipformer 的模型卡可读，但 Hugging Face API 返回 401，缺少可信的文件校验元数据；未加入可安装目录，未实现其假名标记规范化，也未声称日语原生流式推理已可用。Vosk、NeMo、SeamlessStreaming 等仍为研究候选。HY-MT 于 2026-10-22 独立接入并实测，见 [HY-MT 验证](hy-mt-validation-2026-10-22.md)。
 
 调研来源、厂商差异与配置方法见 [云服务配置](cloud-services.md)、[计划与官方资料](cloud-streaming-plan.md)、[本地链路](local-asr-and-translation.md)。

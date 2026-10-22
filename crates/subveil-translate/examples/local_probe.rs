@@ -43,14 +43,27 @@ fn main() -> anyhow::Result<()> {
         ensure!(Instant::now() < deadline, "model loading timeout");
         thread::sleep(Duration::from_millis(10));
     }
-    for (index, (language, text, meaning)) in [
+    let mut quality_failures = 0;
+    for (index, (language, target, text, meaning)) in [
         (
             "en",
+            "zh",
             "Good morning. The weather is very nice today.",
             "weather",
         ),
-        ("ja", "こんにちは。今日はとても良い天気です。", "weather"),
-        ("ja", "うちの中学は弁当制で", "fragment"),
+        (
+            "ja",
+            "zh",
+            "こんにちは。今日はとても良い天気です。",
+            "weather",
+        ),
+        ("ja", "zh", "うちの中学は弁当制で", "fragment"),
+        ("en", "zh", "Do not pay 50 dollars.", "negation_zh"),
+        ("zh", "en", "不要支付50美元。", "negation_en"),
+        ("en", "ja", "Do not pay 50 dollars.", "negation_ja"),
+        ("ja", "en", "50ドルを払わないでください。", "negation_en"),
+        ("zh", "ja", "不要支付50美元。", "negation_ja"),
+        ("en", "zh", "Subveil is ready.", "glossary"),
     ]
     .into_iter()
     .enumerate()
@@ -67,8 +80,12 @@ fn main() -> anyhow::Result<()> {
                 start_ms: 0,
                 end_ms: 100,
             },
-            "zh".into(),
+            target.into(),
         );
+        if meaning == "glossary" {
+            request.context = "Subveil is a subtitle application.".into();
+            request.glossary = "Subveil 翻译成 字幕帷幕".into();
+        }
         request.deadline = Instant::now() + Duration::from_secs(25);
         let started = Instant::now();
         worker.submit(request);
@@ -83,14 +100,34 @@ fn main() -> anyhow::Result<()> {
                                 .iter()
                                 .any(|term| text.contains(term))
                     }
+                    "negation_zh" => {
+                        text.contains("50")
+                            && text.contains("美元")
+                            && ["不", "勿"].iter().any(|s| text.contains(s))
+                    }
+                    "negation_en" => {
+                        let lower = text.to_lowercase();
+                        lower.contains("50")
+                            && (lower.contains("dollar") || lower.contains('$'))
+                            && (lower.contains("not")
+                                || lower.contains("n't")
+                                || lower.contains("n’t"))
+                    }
+                    "negation_ja" => {
+                        !text.contains("必要")
+                            && !text.contains("なくても")
+                            && text.contains("50")
+                            && text.contains("ドル")
+                            && ["ない", "ません", "禁止"].iter().any(|s| text.contains(s))
+                    }
+                    "glossary" => text.contains("字幕帷幕"),
                     _ => false,
                 };
-                ensure!(
-                    matched,
-                    "fixture translation missed meaning or added unsupported content"
-                );
+                if !matched {
+                    quality_failures += 1;
+                }
                 println!(
-                    "{language}->zh: {} chars, {} ms; fixture meaning matched",
+                    "{language}->{target}: {} chars, {} ms; {meaning} matched={matched}",
                     text.chars().count(),
                     started.elapsed().as_millis()
                 );
@@ -109,6 +146,10 @@ fn main() -> anyhow::Result<()> {
         ensure!(Instant::now() < deadline, "unload timeout");
         thread::sleep(Duration::from_millis(10));
     }
-    println!("Model unloaded");
+    println!("Model unloaded; fixture_quality_failures={quality_failures}");
+    ensure!(
+        quality_failures == 0,
+        "fixed-fixture quality checks failed; not a general translation score"
+    );
     Ok(())
 }

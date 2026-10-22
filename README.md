@@ -162,3 +162,8 @@ Workspace 包含 `subveil` 应用、`subveil-core` 核心状态与推理协议�
 
 
 字幕样式页可固定选择输出屏幕；屏幕断开时浮窗暂停，重连后恢复。可按需启用 Linux SNI 托盘和 Portal 全局快捷键。快捷键需桌面授权，不能启动采集或上传。`mise exec -- target/debug/subveil --check-desktop` 只检查桌面服务，不绑定快捷键。实际支持和验收边界见 [整改台账](docs/competitive-remediation-plan.md)。
+
+
+2026-10-22 整改加入显式屏幕选择、热插拔、可选托盘/Portal 快捷键、模型筛选与 HTTPS 下载端点、Whisper token 时间过滤及短句阅读组。诊断页提供状态至 GPUI 绘制回调的有界指标；这不是物理屏幕呈现时间。见[整改台账](docs/competitive-remediation-plan.md)和[固定公开语料结果](docs/quality-validation-2026-10-22.md)。
+
+本地翻译新增 HY-MT1.5 1.8B，独立提示与采样，CPU/NVIDIA/Intel Vulkan 已实际推理。使用腾讯自定义许可，安装前须阅读并确认地区和用途符合完整条款；不默认下载或替换 Qwen。少量固定样本不代表通用准确率。见[适配与验证](docs/hy-mt-validation-2026-10-22.md)。
