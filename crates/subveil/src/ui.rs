@@ -169,6 +169,7 @@ pub struct ControlView {
     audio_source_items: Vec<SharedString>,
     session: Entity<Session>,
     page: usize,
+    last_dark_theme: InterfaceTheme,
     model_tab: usize,
     service_tab: usize,
     focus: FocusHandle,
@@ -577,6 +578,12 @@ impl ControlView {
         input_subscriptions.push(search_subscription);
         input_subscriptions.push(model_search_subscription);
         let credentials_generation = session.read(cx).credentials_generation;
+        let scheme = session.read(cx).settings.interface_theme;
+        let last_dark_theme = if scheme.is_dark() {
+            scheme
+        } else {
+            scheme.opposite()
+        };
         Self {
             model_search,
             download_origin,
@@ -594,6 +601,7 @@ impl ControlView {
                 0
             },
             focus,
+            last_dark_theme,
             model_tab: 0,
             service_tab: 0,
             sidebar_collapsed: false,
@@ -623,6 +631,9 @@ impl ControlView {
     }
 
     fn choose_theme(&mut self, scheme: InterfaceTheme, cx: &mut Context<Self>) {
+        if scheme.is_dark() {
+            self.last_dark_theme = scheme;
+        }
         theme::apply(scheme, cx);
         self.session.update(cx, |s, cx| {
             s.set_interface_theme(scheme, cx);
@@ -630,7 +641,12 @@ impl ControlView {
     }
 
     fn toggle_theme(&mut self, cx: &mut Context<Self>) {
-        let scheme = self.session.read(cx).settings.interface_theme.opposite();
+        let current = self.session.read(cx).settings.interface_theme;
+        let scheme = if !current.is_dark() && self.last_dark_theme.opposite() == current {
+            self.last_dark_theme
+        } else {
+            current.opposite()
+        };
         self.choose_theme(scheme, cx);
     }
 }

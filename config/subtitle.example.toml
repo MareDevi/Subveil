@@ -2,7 +2,9 @@
 # Changes are loaded on startup. The control window saves only on explicit request.
 # Colors are 24-bit RGB integers. Opacity affects only the panel background.
 # App palette: graphite_dark, graphite_light, indigo_dark, indigo_light,
-# sand_dark, or sand_light. Subtitle text and panel colors remain independent.
+# sand_dark, sand_light, catppuccin_latte, catppuccin_frappe,
+# catppuccin_macchiato, catppuccin_mocha, nord_dark, nord_light,
+# solarized_dark, or solarized_light. Subtitle colors remain independent.
 interface_theme = "graphite_dark"
 font_family = "sans-serif"
 font_size = 32.0

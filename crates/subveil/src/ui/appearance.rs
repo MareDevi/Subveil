@@ -1,7 +1,7 @@
 use super::*;
 
 impl ControlView {
-    pub(super) fn render_appearance(&self, cx: &App) -> gpui_kit::Div {
+    pub(super) fn render_appearance(&self, cx: &Context<Self>) -> gpui_kit::Div {
         let session = self.session.read(cx);
         let settings = &session.settings;
         let mode_session = self.session.clone();
@@ -15,7 +15,6 @@ impl ControlView {
             ))
             .child(section("应用配色", "即时应用到全部控制页与弹层；保存样式后，下次启动沿用。字幕颜色独立设置。", cx))
             .child(div().grid().grid_cols(3).gap_2().children(InterfaceTheme::ALL.into_iter().map(|scheme| {
-                let owner = self.session.clone();
                 let p = theme::palette(scheme);
                 Button::new(("interface-theme", scheme as usize)).h_20().w_full()
                     .selected(settings.interface_theme == scheme)
@@ -26,13 +25,10 @@ impl ControlView {
                             .child(div().h_full().flex_1().bg(p.canvas))
                             .child(div().h_full().w_6().bg(p.accent)))
                         .child(row().flex_nowrap()
-                            .child(div().flex_1().text_sm().child(scheme.name()))
+                            .child(div().flex_1().text_xs().child(scheme.name()))
                             .when(settings.interface_theme == scheme, |v| v.child(Icon::new(IconName::Check).xsmall()))))
                     .accessibility_label(scheme.name())
-                    .on_click(move |_, _, cx| {
-                        theme::apply(scheme, cx);
-                        owner.update(cx, |s, cx| s.set_interface_theme(scheme, cx));
-                    })
+                    .on_click(cx.listener(move |s, _, _, cx| s.choose_theme(scheme, cx)))
             })))
             .child(
                 column()

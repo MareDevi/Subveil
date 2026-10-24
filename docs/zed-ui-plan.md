@@ -35,3 +35,17 @@
 ## 限制与后续
 
 原生窗口的人工鼠标操作、多显示器、屏幕阅读器、系统缩放、其他 compositor 和长时稳定性未验证。本轮未重新验证 ASR、翻译推理或 GPU 推理能力；界面截图中的字幕来自离线 mock，不代表真实识别结果。字幕浮窗保留现有独立内容配色、显示模式与平台能力边界。
+
+## 流行配色扩展（2026-10-24）
+
+新增 Catppuccin Latte、Frappé、Macchiato、Mocha，Nord 深浅色及 Solarized 深浅色，与已有六套共计 14 套。原有配置值和默认值保持兼容。色值来自官方资料，语义角色映射由 Subveil 定义，未引入外部主题代码或依赖：
+
+- [Catppuccin Palette](https://catppuccin.com/palette/)：Base / Mantle / Surface 构成表面层次，Text / Subtext 1 用于文字，Blue 用于主要操作。
+- [Nord Colors and Palettes](https://www.nordtheme.com/docs/colors-and-palettes/)：Polar Night / Snow Storm 分别用于深浅表面，Frost 用于强调色。浅色是按官方明亮背景约定所做的应用映射。
+- [Solarized](https://ethanschoonover.com/solarized/)：使用官方 16 色表，Base03 / Base3 作为深浅背景，Cyan 作为主要操作；次级文字选用更高对比的基色，确保小字号可读。
+
+原有语义状态色继续来自匹配明暗模式的组件库默认主题。浅色强调色上的按钮文字单独指定，避免白字配浅蓝底。配色按钮保留文本名称和选中标记，不依赖色块辨认。切换配色不改变字幕内容颜色。
+
+Catppuccin 三种深色共用 Latte。控制窗口记住最后选择的深色风味，明暗快捷键可返回该风味；重启后若保存的是 Latte，默认深色对应 Mocha。保存的具体配色值仍随显式保存持久化。
+
+扩展后验证：`mise run doctor` 和 `mise run check` 通过，共 148 项测试通过、1 项依赖 GPU 的视觉测试默认忽略。另显式运行该 GPU 测试通过（57.52 秒），生成 14 套主题 × 五页及七个子页，共 77 张截图，审阅新增主题对照图、配色选择页和 Nord 实时页。新增对比度测试覆盖全部配色的正文表面与主要按钮标签，均达到至少 4.5:1；交互测试覆盖全部配色、保存读取及每种深色风味的明暗往返。人工鼠标操作、多屏、系统缩放和屏幕阅读器仍未验证。

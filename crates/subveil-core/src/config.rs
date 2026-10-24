@@ -33,17 +33,41 @@ pub enum InterfaceTheme {
     SandDark,
     /// Warm light workspace.
     SandLight,
+    /// Catppuccin light flavor.
+    CatppuccinLatte,
+    /// Catppuccin muted dark flavor.
+    CatppuccinFrappe,
+    /// Catppuccin medium dark flavor.
+    CatppuccinMacchiato,
+    /// Catppuccin original dark flavor.
+    CatppuccinMocha,
+    /// Nord Polar Night surfaces.
+    NordDark,
+    /// Nord Snow Storm surfaces.
+    NordLight,
+    /// Solarized dark appearance.
+    SolarizedDark,
+    /// Solarized light appearance.
+    SolarizedLight,
 }
 
 impl InterfaceTheme {
     /// Supported palettes in stable picker order.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 14] = [
         Self::GraphiteDark,
         Self::GraphiteLight,
         Self::IndigoDark,
         Self::IndigoLight,
         Self::SandDark,
         Self::SandLight,
+        Self::CatppuccinLatte,
+        Self::CatppuccinFrappe,
+        Self::CatppuccinMacchiato,
+        Self::CatppuccinMocha,
+        Self::NordDark,
+        Self::NordLight,
+        Self::SolarizedDark,
+        Self::SolarizedLight,
     ];
 
     /// Localized name used by all application theme controls.
@@ -55,15 +79,32 @@ impl InterfaceTheme {
             Self::IndigoLight => "靛蓝 · 浅色",
             Self::SandDark => "沙丘 · 深色",
             Self::SandLight => "沙丘 · 浅色",
+            Self::CatppuccinLatte => "Catppuccin Latte",
+            Self::CatppuccinFrappe => "Catppuccin Frappé",
+            Self::CatppuccinMacchiato => "Catppuccin Macchiato",
+            Self::CatppuccinMocha => "Catppuccin Mocha",
+            Self::NordDark => "Nord · 深色",
+            Self::NordLight => "Nord · 浅色",
+            Self::SolarizedDark => "Solarized · 深色",
+            Self::SolarizedLight => "Solarized · 浅色",
         }
     }
 
     /// Whether this palette uses dark surfaces.
     pub fn is_dark(self) -> bool {
-        matches!(self, Self::GraphiteDark | Self::IndigoDark | Self::SandDark)
+        !matches!(
+            self,
+            Self::GraphiteLight
+                | Self::IndigoLight
+                | Self::SandLight
+                | Self::CatppuccinLatte
+                | Self::NordLight
+                | Self::SolarizedLight
+        )
     }
 
     /// Opposite appearance within the same palette family.
+    /// Catppuccin dark flavors share Latte; its default dark counterpart is Mocha.
     pub fn opposite(self) -> Self {
         match self {
             Self::GraphiteDark => Self::GraphiteLight,
@@ -72,6 +113,14 @@ impl InterfaceTheme {
             Self::IndigoLight => Self::IndigoDark,
             Self::SandDark => Self::SandLight,
             Self::SandLight => Self::SandDark,
+            Self::CatppuccinLatte => Self::CatppuccinMocha,
+            Self::CatppuccinFrappe | Self::CatppuccinMacchiato | Self::CatppuccinMocha => {
+                Self::CatppuccinLatte
+            }
+            Self::NordDark => Self::NordLight,
+            Self::NordLight => Self::NordDark,
+            Self::SolarizedDark => Self::SolarizedLight,
+            Self::SolarizedLight => Self::SolarizedDark,
         }
     }
 }
@@ -254,7 +303,12 @@ mod tests {
                 ..Default::default()
             };
             assert_eq!(OverlaySettings::from_toml(&settings.to_toml()?)?, settings);
-            assert_eq!(scheme.opposite().opposite(), scheme);
+            if !matches!(
+                scheme,
+                InterfaceTheme::CatppuccinFrappe | InterfaceTheme::CatppuccinMacchiato
+            ) {
+                assert_eq!(scheme.opposite().opposite(), scheme);
+            }
             assert_ne!(scheme.is_dark(), scheme.opposite().is_dark());
             assert_eq!(
                 settings.translation_color,

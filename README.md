@@ -35,7 +35,7 @@ mise run doctor:cuda
 mise run models:cuda
 ```
 
-控制窗口使用 GPUI Kit 原生侧栏，包含「实时字幕、语音服务、模型库、字幕样式、运行诊断」五页。`Ctrl+1` 至 `Ctrl+4` 依次打开实时字幕、语音服务、字幕样式、运行诊断，`Ctrl+5` 打开模型库，`Ctrl+B` 折叠或展开侧栏。`Ctrl+Shift+O` 显示或隐藏浮窗，`Ctrl+S` 保存样式，`Ctrl+Shift+L` 切换明暗外观。恢复入口支持 `Enter` 恢复控制窗口。应用配色提供石墨、靛蓝、沙丘三组深浅方案，在「字幕样式」即时预览，点击「保存样式」或按 `Ctrl+S` 后持久化；明暗快捷键保留当前配色组。侧栏折叠不持久化。模型安装、来源与许可证在独立「模型库」中查看；开始识别与上传授权仍在「语音服务」。设计与实测记录见 [Zed 风格重构](docs/zed-ui-plan.md) 和 [原生界面重构](docs/ui-redesign.md)。
+控制窗口使用 GPUI Kit 原生侧栏，包含「实时字幕、语音服务、模型库、字幕样式、运行诊断」五页。`Ctrl+1` 至 `Ctrl+4` 依次打开实时字幕、语音服务、字幕样式、运行诊断，`Ctrl+5` 打开模型库，`Ctrl+B` 折叠或展开侧栏。`Ctrl+Shift+O` 显示或隐藏浮窗，`Ctrl+S` 保存样式，`Ctrl+Shift+L` 切换明暗外观。恢复入口支持 `Enter` 恢复控制窗口。应用配色提供 14 套方案：石墨、靛蓝、沙丘深浅色，Catppuccin Latte / Frappé / Macchiato / Mocha，Nord 与 Solarized 深浅色，在「字幕样式」即时预览，点击「保存样式」或按 `Ctrl+S` 后持久化；明暗快捷键保留当前配色组；Catppuccin 在当前控制窗口内记住最近使用的深色风味，与 Latte 来回切换。侧栏折叠不持久化。模型安装、来源与许可证在独立「模型库」中查看；开始识别与上传授权仍在「语音服务」。设计与实测记录见 [Zed 风格重构](docs/zed-ui-plan.md) 和 [原生界面重构](docs/ui-redesign.md)。
 
 控制窗口可在 Wayland 或 X11 会话运行；字幕浮窗需要支持 `zwlr_layer_shell_v1` 的 Linux Wayland compositor。X11 会明确提示不支持浮窗，不创建伪置顶窗口。
 

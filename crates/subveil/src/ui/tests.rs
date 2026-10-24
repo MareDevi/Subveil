@@ -40,6 +40,16 @@ fn palettes_sync_component_base_and_saved_settings_without_starting_capture(
     cx.run_until_parked();
     for scheme in InterfaceTheme::ALL {
         cx.update_window(handle, |_, w, cx| {
+            for _ in 0..8 {
+                if w.find(("interface-theme", scheme as usize)).visible() {
+                    break;
+                }
+                w.scroll(
+                    ("workspace-scroll", 2usize),
+                    gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-160.))),
+                    cx,
+                );
+            }
             w.click(("interface-theme", scheme as usize), cx);
         })
         .expect("select native palette button");
@@ -62,6 +72,14 @@ fn palettes_sync_component_base_and_saved_settings_without_starting_capture(
                 cx.theme().semantic_tokens().colors
             );
         });
+        if scheme.is_dark() {
+            for _ in 0..2 {
+                cx.update_window(handle, |_, w, cx| w.press("ctrl-shift-l", cx))
+                    .expect("toggle appearance");
+                cx.run_until_parked();
+            }
+            cx.update(|cx| assert_eq!(session.read(cx).settings.interface_theme, scheme));
+        }
     }
     cx.update_window(handle, |_, w, cx| {
         w.press("ctrl-shift-l", cx);
@@ -71,7 +89,7 @@ fn palettes_sync_component_base_and_saved_settings_without_starting_capture(
     cx.update(|cx| {
         assert_eq!(
             session.read(cx).settings.interface_theme,
-            InterfaceTheme::SandDark
+            InterfaceTheme::SolarizedDark
         )
     });
     cx.update_window(handle, |_, w, cx| {
@@ -83,7 +101,7 @@ fn palettes_sync_component_base_and_saved_settings_without_starting_capture(
         crate::storage::load(&path)
             .expect("saved theme")
             .interface_theme,
-        InterfaceTheme::SandDark
+        InterfaceTheme::SolarizedDark
     );
     std::fs::remove_file(path).expect("remove test settings");
     cx.simulate_window_resize(handle, size(px(760.), px(560.)));
