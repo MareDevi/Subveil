@@ -12,9 +12,8 @@ impl ControlView {
             .role(gpui_kit::Role::Status)
             .gap_3()
             .min_h_48()
-            .p_6()
-            .rounded(cx.theme().radius)
-            .bg(cx.theme().muted);
+            .p_5()
+            .bg(cx.theme().background);
         if let Some(subtitle) = session.subtitles.current() {
             preview = preview
                 .child(help(
@@ -25,7 +24,12 @@ impl ControlView {
                     },
                     cx,
                 ))
-                .child(div().text_lg().child(subtitle.transcript.text.clone()))
+                .child(
+                    div()
+                        .text_base()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(subtitle.transcript.text.clone()),
+                )
                 .child(
                     div().text_xl().child(match &subtitle.translation {
                         TranslationState::Complete(text) => text.clone(),
@@ -127,18 +131,15 @@ impl ControlView {
         if session.subtitles.history().is_empty() && session.archive.is_none() {
             history = history.child(help("会话开始后，保留的原文与译文将显示在这里。", cx));
         }
-        column()
-            .gap_3()
-            .child(heading(
-                "实时字幕",
-                "查看当前原文与服务译文，控制桌面字幕浮窗。",
-                cx,
-            ))
+        let configuration = column()
+            .gap_2()
+            .child(section("会话配置", "停止识别后可修改服务与语言。", cx))
             .child(
                 row()
                     .child(compact_field(
                         "音源",
                         Select::new(&self.audio_source)
+                            .small()
                             .w_full()
                             .accessibility_label("采集音源")
                             .disabled(busy || session.audio_active()),
@@ -171,6 +172,7 @@ impl ControlView {
                     .child(compact_field(
                         "识别服务",
                         Select::new(&self.provider)
+                            .small()
                             .w_full()
                             .accessibility_label("识别服务")
                             .disabled(busy || session.offline),
@@ -203,24 +205,6 @@ impl ControlView {
                 },
                 cx,
             ))
-            .child(
-                button(
-                    "start-live-subtitles",
-                    if session.asr_active() {
-                        "停止识别与音频"
-                    } else if session.asr_config.provider.is_cloud() {
-                        "同意上传音频并开始"
-                    } else if session.asr_config.provider == subveil_asr::Provider::Mock {
-                        "开始模拟识别（不是实际字幕）"
-                    } else {
-                        "开始本地字幕"
-                    },
-                    &self.session,
-                    Session::toggle_asr,
-                )
-                .disabled(!session.asr_active() && !issues.is_empty())
-                .primary(),
-            )
             .when(session.asr_config.provider.is_cloud(), |view| {
                 view.child(help(
                     format!(
@@ -258,46 +242,34 @@ impl ControlView {
                         .disabled(busy),
                     )
                 },
-            )
+            );
+        let monitor = column()
+            .gap_3()
+            .flex_1()
+            .min_w_64()
             .child(
-                row()
+                column()
+                    .gap_0()
+                    .border_1()
+                    .border_color(cx.theme().border)
                     .child(
-                        Button::new("configure-session")
-                            .label("配置语音服务…")
-                            .icon(IconName::Mic)
-                            .on_click(cx.listener(|s, _, window, cx| s.select_page(1, window, cx))),
+                        row()
+                            .px_3()
+                            .py_2()
+                            .bg(cx.theme().sidebar)
+                            .child(Icon::new(IconName::FileText).small())
+                            .child(div().flex_1().text_sm().child("当前字幕"))
+                            .child(help(
+                                if session.running {
+                                    "离线演示"
+                                } else {
+                                    "实时预览"
+                                },
+                                cx,
+                            )),
                     )
-                    .child(
-                        button(
-                            "demo",
-                            if session.running {
-                                "重新演示"
-                            } else {
-                                "离线演示"
-                            },
-                            &self.session,
-                            |s, cx| {
-                                if s.running {
-                                    s.stop(cx);
-                                }
-                                s.start(cx);
-                            },
-                        )
-                        .icon(IconName::Play)
-                        .disabled(session.asr_active() || session.asr_stopping),
-                    )
-                    .child(
-                        button("stop", "停止字幕", &self.session, Session::stop)
-                            .icon(IconName::Square)
-                            .ghost()
-                            .disabled(
-                                !session.running
-                                    && !session.asr_active()
-                                    && !session.audio_active(),
-                            ),
-                    ),
+                    .child(preview),
             )
-            .child(preview)
             .child(div().text_sm().child(format!(
                 "当前服务：{} · {}",
                 session.asr_config.provider.name(),
@@ -337,6 +309,7 @@ impl ControlView {
             .child(field(
                 "搜索字幕",
                 Input::new(&self.history_search)
+                    .small()
                     .id("history-search")
                     .aria_label("搜索原文或译文"),
                 cx,
@@ -353,6 +326,7 @@ impl ControlView {
                     .map(|(format, label)| {
                         let owner = self.session.clone();
                         Button::new(format)
+                            .small()
                             .label(label)
                             .disabled(session.archive_busy)
                             .on_click(move |_, _, cx| {
@@ -386,7 +360,104 @@ impl ControlView {
                         .disabled(session.archive.is_none() || session.archive_busy),
                     ),
             )
-            .child(history)
+            .child(history);
+        column()
+            .gap_4()
+            .child(heading(
+                "实时字幕",
+                "开始会话，查看原文与译文。字幕浮窗可独立显示。",
+                cx,
+            ))
+            .child(
+                row()
+                    .child(
+                        button(
+                            "start-live-subtitles",
+                            if session.asr_active() {
+                                "停止识别与音频"
+                            } else if session.asr_config.provider.is_cloud() {
+                                "同意上传音频并开始"
+                            } else if session.asr_config.provider == subveil_asr::Provider::Mock {
+                                "开始模拟识别（不是实际字幕）"
+                            } else {
+                                "开始本地字幕"
+                            },
+                            &self.session,
+                            Session::toggle_asr,
+                        )
+                        .disabled(!session.asr_active() && !issues.is_empty())
+                        .primary(),
+                    )
+                    .child(
+                        row()
+                            .gap_1()
+                            .child(
+                                Button::new("configure-session")
+                                    .small()
+                                    .ghost()
+                                    .label("配置语音服务…")
+                                    .icon(IconName::Mic)
+                                    .on_click(
+                                        cx.listener(|s, _, window, cx| {
+                                            s.select_page(1, window, cx)
+                                        }),
+                                    ),
+                            )
+                            .child(
+                                button(
+                                    "demo",
+                                    if session.running {
+                                        "重新演示"
+                                    } else {
+                                        "离线演示"
+                                    },
+                                    &self.session,
+                                    |s, cx| {
+                                        if s.running {
+                                            s.stop(cx);
+                                        }
+                                        s.start(cx);
+                                    },
+                                )
+                                .icon(IconName::Play)
+                                .disabled(session.asr_active() || session.asr_stopping),
+                            )
+                            .child(
+                                button("stop", "停止字幕", &self.session, Session::stop)
+                                    .icon(IconName::Square)
+                                    .ghost()
+                                    .disabled(
+                                        !session.running
+                                            && !session.asr_active()
+                                            && !session.audio_active(),
+                                    ),
+                            ),
+                    ),
+            )
+            .child(help(
+                if issues.is_empty() {
+                    "配置已就绪；开始后会后台校验并加载模型".into()
+                } else {
+                    issues.join("；")
+                },
+                cx,
+            ))
+            .when(session.asr_config.provider.is_cloud(), |v| {
+                v.child(help(
+                    format!(
+                        "音频上传目标：{}；仅点击同意按钮开始上传，云服务可能收费。",
+                        session.asr_config.destination()
+                    ),
+                    cx,
+                ))
+            })
+            .child(
+                row()
+                    .gap_5()
+                    .items_start()
+                    .child(monitor)
+                    .child(configuration.w_72().min_w_0().flex_shrink_0()),
+            )
     }
 }
 
@@ -399,7 +470,7 @@ fn compact_field(label: &'static str, control: impl IntoElement) -> gpui_kit::Di
         .child(control)
 }
 impl ControlView {
-    fn compact_choice(
+    pub(super) fn compact_choice(
         &self,
         kind: Choice,
         label: &'static str,
@@ -410,6 +481,7 @@ impl ControlView {
             Some(choice) => compact_field(
                 label,
                 Select::new(&choice.state)
+                    .small()
                     .w_full()
                     .accessibility_label(label)
                     .disabled(disabled || choice.items.is_empty()),

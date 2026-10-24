@@ -1,7 +1,7 @@
 use super::*;
 
 impl ControlView {
-    pub(super) fn render_models(&self, cx: &App) -> gpui_kit::Div {
+    pub(super) fn render_models(&self, cx: &mut Context<Self>) -> gpui_kit::Div {
         let session = self.session.read(cx);
         let busy = session.asr_active()
             || session.asr_stopping
@@ -12,35 +12,86 @@ impl ControlView {
         column()
             .child(heading(
                 "模型库",
-                "安装、校验和选用本地模型。开始识别仍需前往语音服务。",
+                "安装、校验和选用本地模型。安装后，在实时字幕中开始会话。",
                 cx,
             ))
-            .child(Input::new(&self.model_search).id("model-search").aria_label("搜索模型"))
-            .child(self.render_choice(Choice::ModelLanguage, "筛选语言", false, cx))
-            .child(self.render_choice(Choice::ModelMode, "筛选模式", false, cx))
-            .child(help(format!("符合条件：识别 {} / 翻译 {}；当前所选模型始终保留，筛选不自动切换模型。",
-                session.local_models.catalog.iter().filter(|m| session.model_filter.matches(m)).count(),
-                session.translation_models.catalog.iter().filter(|m| session.model_filter.matches(m)).count()), cx))
-            .child(help("选用建议：中英低延迟优先原生 Zipformer；日语目前使用 SenseVoice 句末识别或 Whisper 分块。显存紧张选 Qwen 0.5B，1.5B 需要更多内存。建议不是质量排名，仍须按实际语料比较。", cx))
-            .child(section("下载源", "修改只影响显式安装；固定版本和 SHA-256 校验不变，不会自动回退其他站点。", cx))
-            .child(Input::new(&self.download_origin).id("download-origin").aria_label("模型下载源").disabled(busy))
-            .child({
-                let input = self.download_origin.clone();
-                let owner = self.session.clone();
-                Button::new("apply-download-origin").label("应用下载源").disabled(busy)
-                    .on_click(move |_,_,cx| {
-                        let value = input.read(cx).value().to_string();
-                        owner.update(cx,|s,cx|s.set_download_source(&value,cx));
-                    })
+            .child(
+                Input::new(&self.model_search)
+                    .small()
+                    .id("model-search")
+                    .aria_label("搜索模型"),
+            )
+            .child(
+                row()
+                    .items_start()
+                    .child(self.compact_choice(Choice::ModelLanguage, "筛选语言", false, cx))
+                    .child(self.compact_choice(Choice::ModelMode, "筛选模式", false, cx)),
+            )
+            .child(help(
+                format!(
+                    "符合条件：识别 {} / 翻译 {}；当前所选模型始终保留，筛选不自动切换模型。",
+                    session
+                        .local_models
+                        .catalog
+                        .iter()
+                        .filter(|m| session.model_filter.matches(m))
+                        .count(),
+                    session
+                        .translation_models
+                        .catalog
+                        .iter()
+                        .filter(|m| session.model_filter.matches(m))
+                        .count()
+                ),
+                cx,
+            ))
+            .child(
+                TabBar::new("model-tabs")
+                    .small()
+                    .folder()
+                    .selected_index(self.model_tab)
+                    .children(
+                        ["语音识别", "文字翻译", "语音检测", "下载与维护"]
+                            .into_iter()
+                            .map(|label| Tab::new().label(label)),
+                    )
+                    .on_click(cx.listener(|s, index: &usize, _, cx| {
+                        s.model_tab = *index;
+                        s.scroll[4].set_offset(Default::default());
+                        cx.notify();
+                    })),
+            )
+            .child(match self.model_tab {
+                1 => self.render_translation_library(cx),
+                2 => self.render_voice_detection(busy, cx),
+                3 => self.render_model_maintenance(busy, cx),
+                _ => self.render_recognition_library(cx),
             })
-            .child(help(format!("当前下载端点：{}", if session.local_models.source_error { "设置无效，已暂停联网安装" } else { session.local_models.source.origin() }), cx))
-            .child(help("自定义地址仅支持 HTTPS 站点根地址；不含音频或字幕，仅请求公开权重。离线模式仍禁止联网。", cx))
+            .child(
+                button(
+                    "save-model-settings",
+                    "保存本地设置",
+                    &self.session,
+                    Session::save_local_settings,
+                )
+                .disabled(busy || session.saving_local)
+                .loading(session.saving_local),
+            )
+    }
+
+    fn render_translation_library(&self, cx: &App) -> gpui_kit::Div {
+        column()
             .child(section(
-                "语音识别",
-                "选择适合源语言的模型；安装前查看来源、许可证和所需空间。",
+                "本地翻译",
+                "模型在本机运行；语音服务中选择本地翻译后生效。",
                 cx,
             ))
-            .child(self.render_local_models(cx))
+            .child(self.render_local_translation(cx))
+    }
+
+    fn render_voice_detection(&self, busy: bool, cx: &App) -> gpui_kit::Div {
+        let session = self.session.read(cx);
+        column()
             .child(section("语音检测", "可选 Silero 神经 VAD；关闭时保留能量分段对照。", cx))
             .child(help(if session.asr_config.vad_model.is_some() { "当前使用 Silero VAD" } else { "当前使用能量阈值" }, cx))
             .when_some(session.vad_models.current(), |view, model| view
@@ -57,16 +108,28 @@ impl ControlView {
             .child(self.render_choice(Choice::VadHangover, "句尾静音等待", busy, cx))
             .child(self.render_choice(Choice::VadMaximum, "最长语音分段", busy, cx))
             .child(help("静音等待适用于能量 / Silero 分段和 Zipformer 端点；最长分段适用于离线识别。Whisper 使用独立 2 / 4 / 8 秒块长。标点只能封口可修订草稿，不把 Partial 伪装成 Final。", cx))
-            .child(section(
-                "本地翻译",
-                "模型在本机运行；语音服务中选择本地翻译后生效。",
-                cx,
-            ))
-            .child(self.render_local_translation(cx))
+    }
+
+    fn render_model_maintenance(&self, busy: bool, cx: &App) -> gpui_kit::Div {
+        let session = self.session.read(cx);
+        column()
+            .child(section("下载源", "修改只影响显式安装；固定版本和 SHA-256 校验不变，不会自动回退其他站点。", cx))
+            .child(Input::new(&self.download_origin).small().id("download-origin").aria_label("模型下载源").disabled(busy))
+            .child({
+                let input = self.download_origin.clone();
+                let owner = self.session.clone();
+                Button::new("apply-download-origin").small().label("应用下载源").disabled(busy)
+                    .on_click(move |_,_,cx| {
+                        let value = input.read(cx).value().to_string();
+                        owner.update(cx,|s,cx|s.set_download_source(&value,cx));
+                    })
+            })
+            .child(help(format!("当前下载端点：{}", if session.local_models.source_error { "设置无效，已暂停联网安装" } else { session.local_models.source.origin() }), cx))
+            .child(help("自定义地址仅支持 HTTPS 站点根地址；不含音频或字幕，仅请求公开权重。离线模式仍禁止联网。", cx))
             .child(help("卸载仅删除所选目录模型的固定版本缓存；运行或安装期间不可卸载。", cx))
             .child(row().children([(0u8, "uninstall-asr", "卸载所选识别模型"), (1, "uninstall-mt", "卸载所选翻译模型"), (2, "uninstall-vad", "卸载 VAD")].into_iter().map(|(group, id, label)| {
                 let owner = self.session.clone();
-                Button::new(id).label(label).disabled(session.configuration_busy() || session.audio_active())
+                Button::new(id).small().label(label).disabled(session.configuration_busy() || session.audio_active())
                     .on_click(move |_, window, cx| owner.update(cx, |s,cx|s.uninstall_model(group,window,cx)))
             })))
             .child(section("研究候选", "以下尚未接入，不能安装或启动；与已支持的模型分开展示。", cx))
@@ -74,16 +137,17 @@ impl ControlView {
             .child(Link::new("candidate-ja-zipformer").href("https://huggingface.co/fujie/sherpa_onnx_asr_csj_cejc_pron_comp_zipformer_stream_c320_la0").child("日语流式模型卡"))
             .child(help("Vosk：连续识别，需新增运行时与质量对照。NeMo Streaming FastConformer：需缓存式运行时。Qwen3-ASR：须按具体实现验证缓存复用。", cx))
             .child(help("MarianMT / OPUS-MT、NLLB、M2M100：需专用运行时或提示词适配，不等于原生同时翻译。SeamlessStreaming：端到端研究项，CC BY-NC 4.0，不作为默认后端。", cx))
-            .child(
-                button(
-                    "save-model-settings",
-                    "保存本地设置",
-                    &self.session,
-                    Session::save_local_settings,
-                )
-                .disabled(busy || session.saving_local)
-                .loading(session.saving_local),
-            )
+    }
+
+    fn render_recognition_library(&self, cx: &App) -> gpui_kit::Div {
+        column()
+            .child(section(
+                "语音识别",
+                "选择适合源语言的模型；安装前查看来源、许可证和所需空间。",
+                cx,
+            ))
+            .child(self.render_local_models(cx))
+            .child(help("选用建议：中英低延迟优先原生 Zipformer；日语目前使用 SenseVoice 句末识别或 Whisper 分块。显存紧张选 Qwen 0.5B，1.5B 需要更多内存。建议不是质量排名，仍须按实际语料比较。", cx))
     }
 
     pub(super) fn render_local_translation(&self, cx: &App) -> gpui_kit::Div {
@@ -146,6 +210,7 @@ impl ControlView {
                 .child({
                     let owner = self.session.clone();
                     Button::new("install-translation")
+                        .small()
                         .label(if session.offline {
                             "校验并选用本机翻译模型"
                         } else {
@@ -216,6 +281,7 @@ impl ControlView {
         let mut view = column().child(field(
             "识别模型",
             Select::new(&self.local_model)
+                .small()
                 .disabled(busy)
                 .accessibility_label("本地模型目录")
                 .w_full(),

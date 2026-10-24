@@ -16,10 +16,72 @@ pub enum DisplayMode {
     Translation,
 }
 
+/// Application palette, independent of subtitle content colors.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InterfaceTheme {
+    /// Neutral charcoal workspace.
+    #[default]
+    GraphiteDark,
+    /// Neutral paper workspace.
+    GraphiteLight,
+    /// Cool blue workspace.
+    IndigoDark,
+    /// Cool porcelain workspace.
+    IndigoLight,
+    /// Warm dark workspace.
+    SandDark,
+    /// Warm light workspace.
+    SandLight,
+}
+
+impl InterfaceTheme {
+    /// Supported palettes in stable picker order.
+    pub const ALL: [Self; 6] = [
+        Self::GraphiteDark,
+        Self::GraphiteLight,
+        Self::IndigoDark,
+        Self::IndigoLight,
+        Self::SandDark,
+        Self::SandLight,
+    ];
+
+    /// Localized name used by all application theme controls.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::GraphiteDark => "石墨 · 深色",
+            Self::GraphiteLight => "石墨 · 浅色",
+            Self::IndigoDark => "靛蓝 · 深色",
+            Self::IndigoLight => "靛蓝 · 浅色",
+            Self::SandDark => "沙丘 · 深色",
+            Self::SandLight => "沙丘 · 浅色",
+        }
+    }
+
+    /// Whether this palette uses dark surfaces.
+    pub fn is_dark(self) -> bool {
+        matches!(self, Self::GraphiteDark | Self::IndigoDark | Self::SandDark)
+    }
+
+    /// Opposite appearance within the same palette family.
+    pub fn opposite(self) -> Self {
+        match self {
+            Self::GraphiteDark => Self::GraphiteLight,
+            Self::GraphiteLight => Self::GraphiteDark,
+            Self::IndigoDark => Self::IndigoLight,
+            Self::IndigoLight => Self::IndigoDark,
+            Self::SandDark => Self::SandLight,
+            Self::SandLight => Self::SandDark,
+        }
+    }
+}
+
 /// Validated before any configuration is applied to a window.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct OverlaySettings {
+    /// Application chrome palette; saved explicitly with the other appearance settings.
+    pub interface_theme: InterfaceTheme,
     /// Preferred output UUID. None follows the first output in layout order.
     pub output_uuid: Option<String>,
     /// Font family; missing installed glyphs use the platform fallback.
@@ -57,6 +119,7 @@ pub struct OverlaySettings {
 impl Default for OverlaySettings {
     fn default() -> Self {
         Self {
+            interface_theme: InterfaceTheme::default(),
             output_uuid: None,
             font_family: "sans-serif".into(),
             font_size: 32.,
@@ -176,6 +239,29 @@ mod tests {
     #[test]
     fn partial_config_uses_defaults() -> Result<(), ConfigError> {
         assert_eq!(OverlaySettings::from_toml("font_size = 40")?.width, 960.);
+        assert_eq!(
+            OverlaySettings::from_toml("font_size = 40")?.interface_theme,
+            InterfaceTheme::GraphiteDark
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn interface_palettes_round_trip_without_changing_subtitle_colors() -> Result<(), ConfigError> {
+        for scheme in InterfaceTheme::ALL {
+            let settings = OverlaySettings {
+                interface_theme: scheme,
+                ..Default::default()
+            };
+            assert_eq!(OverlaySettings::from_toml(&settings.to_toml()?)?, settings);
+            assert_eq!(scheme.opposite().opposite(), scheme);
+            assert_ne!(scheme.is_dark(), scheme.opposite().is_dark());
+            assert_eq!(
+                settings.translation_color,
+                OverlaySettings::default().translation_color
+            );
+        }
+        assert!(OverlaySettings::from_toml("interface_theme = 'unknown'").is_err());
         Ok(())
     }
 

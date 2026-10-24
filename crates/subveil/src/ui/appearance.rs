@@ -13,16 +13,41 @@ impl ControlView {
                 "修改即时应用到浮窗；点击保存后，下次启动继续使用。",
                 cx,
             ))
+            .child(section("应用配色", "即时应用到全部控制页与弹层；保存样式后，下次启动沿用。字幕颜色独立设置。", cx))
+            .child(div().grid().grid_cols(3).gap_2().children(InterfaceTheme::ALL.into_iter().map(|scheme| {
+                let owner = self.session.clone();
+                let p = theme::palette(scheme);
+                Button::new(("interface-theme", scheme as usize)).h_20().w_full()
+                    .selected(settings.interface_theme == scheme)
+                    .outline()
+                    .child(column().gap_2().w_full().min_w_0().py_2()
+                        .child(row().gap_0().h_6().border_1().border_color(p.border)
+                            .child(div().h_full().w_8().bg(p.panel))
+                            .child(div().h_full().flex_1().bg(p.canvas))
+                            .child(div().h_full().w_6().bg(p.accent)))
+                        .child(row().flex_nowrap()
+                            .child(div().flex_1().text_sm().child(scheme.name()))
+                            .when(settings.interface_theme == scheme, |v| v.child(Icon::new(IconName::Check).xsmall()))))
+                    .accessibility_label(scheme.name())
+                    .on_click(move |_, _, cx| {
+                        theme::apply(scheme, cx);
+                        owner.update(cx, |s, cx| s.set_interface_theme(scheme, cx));
+                    })
+            })))
             .child(
                 column()
-                    .gap_2()
-                    .child(help("样式预览 · 内置样本", cx))
-                    .child(overlay::subtitle_panel(
+                    .gap_0()
+                    .mt_3()
+                    .border_1().border_color(cx.theme().border)
+                    .child(row().px_3().py_2().bg(cx.theme().sidebar)
+                        .child(Icon::new(IconName::Eye).small())
+                        .child(help("字幕预览 · 内置样本", cx)))
+                    .child(div().p_5().child(overlay::subtitle_panel(
                         settings,
                         "The lights go out, and the race is underway!",
                         "灯光熄灭，比赛开始！",
                         cx,
-                    )),
+                    ))),
             )
             .child(section(
                 "文字",

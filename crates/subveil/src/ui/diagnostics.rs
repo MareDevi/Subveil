@@ -10,6 +10,15 @@ impl ControlView {
                 "检查本机音频输入与会话状态。独立采集不会上传音频。",
                 cx,
             ))
+            .child(row().gap_0().items_stretch().border_1().border_color(cx.theme().border)
+                .children([
+                    ("音频块", session.audio.blocks.to_string()),
+                    ("输入丢块", session.audio.dropped_blocks.to_string()),
+                    ("识别重置", session.asr.resets.to_string()),
+                ].into_iter().map(|(label, value)| column().gap_1().flex_1().min_w_32().p_3()
+                    .child(help(label, cx))
+                    .child(div().text_lg().child(value)))))
+            .child(section("音频输入", "独立采集仅用于本机诊断；识别运行期间不可单独启动。", cx))
             .child(field(
                 "系统音频",
                 row()
@@ -57,7 +66,7 @@ impl ControlView {
                     div()
                         .h_full()
                         .w(relative(session.audio.peak.clamp(0., 1.)))
-                        .bg(cx.theme().primary),
+                        .bg(if session.audio.silent { cx.theme().muted_foreground } else { cx.theme().success }),
                 ),
             )
             .child(help(

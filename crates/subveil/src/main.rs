@@ -96,6 +96,7 @@ fn main() -> anyhow::Result<()> {
         .run(move |cx: &mut App| {
             gpui_kit::init(cx);
             ui::init(cx);
+            ui::apply_theme(settings.interface_theme, cx);
             let session = cx.new(|cx| Session::new(settings, config_path, config_error, cx));
             let observer = session.clone();
             cx.on_window_closed(move |cx, id| {

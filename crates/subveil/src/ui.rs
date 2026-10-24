@@ -4,11 +4,13 @@ mod live;
 mod model_library;
 mod service_fields;
 mod services;
+mod shell;
 #[cfg(test)]
 mod tests;
+mod theme;
 
 use gpui_kit::component::{
-    ActiveTheme, Disableable, Icon, IconName, IndexPath, Root, Sizable, Theme, ThemeMode,
+    ActiveTheme, Disableable, Icon, IconName, IndexPath, Root, Selectable, Sizable,
     button::{Button, ButtonVariants},
     input::{Input, InputContentType, InputEvent, InputState},
     link::Link,
@@ -19,13 +21,17 @@ use gpui_kit::component::{
     sidebar::{Sidebar, SidebarMenu, SidebarMenuItem},
     status_bar::StatusBar,
     switch::Switch,
+    tab::{Tab, TabBar},
 };
 use gpui_kit::{
     App, AppContext, Bounds, Context, Entity, FocusHandle, IntoElement, KeyBinding, ParentElement,
     Render, ScrollHandle, SharedString, Styled, Subscription, TitlebarOptions, Window,
     WindowBounds, WindowHandle, WindowOptions, div, prelude::*, px, relative, size,
 };
-use subveil_core::{config::DisplayMode, subtitle::TranslationState};
+use subveil_core::{
+    config::{DisplayMode, InterfaceTheme},
+    subtitle::TranslationState,
+};
 
 use crate::session::Choice;
 use crate::{overlay, session::Session};
@@ -52,6 +58,10 @@ gpui_kit::actions!(
     ]
 );
 
+pub(crate) fn apply_theme(scheme: InterfaceTheme, cx: &mut App) {
+    theme::apply(scheme, cx);
+}
+
 pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("ctrl-1", Live, Some("Subveil")),
@@ -74,13 +84,16 @@ fn button(
     action: impl Fn(&mut Session, &mut Context<Session>) + 'static,
 ) -> Button {
     let session = session.clone();
-    Button::new(id).label(label).on_click(move |_, _, cx| {
-        session.update(cx, |session, cx| action(session, cx));
-    })
+    Button::new(id)
+        .small()
+        .label(label)
+        .on_click(move |_, _, cx| {
+            session.update(cx, |session, cx| action(session, cx));
+        })
 }
 
 fn column() -> gpui_kit::Div {
-    div().flex().flex_col().gap_4()
+    div().flex().flex_col().gap_3()
 }
 
 fn row() -> gpui_kit::Div {
@@ -101,7 +114,7 @@ fn heading(title: &'static str, description: &'static str, cx: &App) -> gpui_kit
         .gap_1()
         .child(
             div()
-                .text_xl()
+                .text_lg()
                 .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                 .child(title),
         )
@@ -113,12 +126,12 @@ fn field(label: &'static str, control: impl IntoElement, cx: &App) -> gpui_kit::
         .flex()
         .items_start()
         .gap_4()
-        .py_4()
+        .py_3()
         .border_b_1()
         .border_color(cx.theme().border)
         .child(
             div()
-                .w_24()
+                .w_32()
                 .flex_shrink_0()
                 .pt_1()
                 .text_sm()
@@ -131,7 +144,10 @@ fn field(label: &'static str, control: impl IntoElement, cx: &App) -> gpui_kit::
 fn section(title: &'static str, description: &'static str, cx: &App) -> gpui_kit::Div {
     column()
         .gap_1()
-        .pt_4()
+        .pt_5()
+        .pb_2()
+        .border_b_1()
+        .border_color(cx.theme().border)
         .child(
             div()
                 .text_base()
@@ -153,6 +169,8 @@ pub struct ControlView {
     audio_source_items: Vec<SharedString>,
     session: Entity<Session>,
     page: usize,
+    model_tab: usize,
+    service_tab: usize,
     focus: FocusHandle,
     scroll: [ScrollHandle; 5],
     sidebar_collapsed: bool,
@@ -179,6 +197,7 @@ impl ControlView {
             field(
                 label,
                 Select::new(&choice.state)
+                    .small()
                     .w_full()
                     .accessibility_label(label)
                     .disabled(disabled || choice.items.is_empty()),
@@ -575,6 +594,8 @@ impl ControlView {
                 0
             },
             focus,
+            model_tab: 0,
+            service_tab: 0,
             sidebar_collapsed: false,
             scroll: std::array::from_fn(|_| ScrollHandle::new()),
             provider,
@@ -601,257 +622,16 @@ impl ControlView {
         }
     }
 
-    fn toggle_theme(window: &mut Window, cx: &mut App) {
-        Theme::change(
-            if cx.theme().is_dark() {
-                ThemeMode::Light
-            } else {
-                ThemeMode::Dark
-            },
-            Some(window),
-            cx,
-        );
-    }
-}
-
-impl ControlView {
-    fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
-        self.sidebar_collapsed = !self.sidebar_collapsed;
-        cx.notify();
+    fn choose_theme(&mut self, scheme: InterfaceTheme, cx: &mut Context<Self>) {
+        theme::apply(scheme, cx);
+        self.session.update(cx, |s, cx| {
+            s.set_interface_theme(scheme, cx);
+        });
     }
 
-    fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let menu = SidebarMenu::new().children(
-            [
-                (0, "实时字幕", IconName::FileText),
-                (1, "语音服务", IconName::Mic),
-                (4, "模型库", IconName::HardDrive),
-                (2, "字幕样式", IconName::Palette),
-                (3, "运行诊断", IconName::SquareTerminal),
-            ]
-            .into_iter()
-            .map(|(page, label, icon)| {
-                SidebarMenuItem::new(label)
-                    .icon(icon)
-                    .active(self.page == page)
-                    .on_click(
-                        cx.listener(move |this, _, window, cx| this.select_page(page, window, cx)),
-                    )
-            }),
-        );
-        Sidebar::new("navigation")
-            .w_48()
-            .collapsed(self.sidebar_collapsed)
-            .header(
-                row()
-                    .h_12()
-                    .px_3()
-                    .flex_nowrap()
-                    .child(Icon::new(IconName::GalleryVerticalEnd).small())
-                    .when(!self.sidebar_collapsed, |view| {
-                        view.child(
-                            div()
-                                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                .child("Subveil"),
-                        )
-                    }),
-            )
-            .child(menu)
-            .footer(
-                column()
-                    .gap_1()
-                    .p_2()
-                    .when(!self.sidebar_collapsed, |view| {
-                        view.child(help("实时字幕与翻译", cx))
-                    })
-                    .child(
-                        Button::new("quit")
-                            .icon(IconName::WindowClose)
-                            .when(!self.sidebar_collapsed, |button| {
-                                button.label("退出 Subveil")
-                            })
-                            .accessibility_label("退出 Subveil")
-                            .ghost()
-                            .small()
-                            .on_click(|_, _, cx| cx.quit()),
-                    ),
-            )
-    }
-}
-
-impl Render for ControlView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let session = self.session.read(cx);
-        let overlay = session.overlay_enabled();
-        let message = session.message.clone();
-        let error = session.config_error.clone();
-        let state = if session.asr_stopping || session.audio_stopping {
-            "正在停止"
-        } else if session.asr_active() {
-            "识别中"
-        } else if session.local_models.downloading() || session.translation_models.downloading() {
-            "模型安装中"
-        } else if session.running {
-            "离线演示中"
-        } else if session.audio_active() {
-            "独立采集中"
-        } else {
-            "待机"
-        };
-        let network = if session.offline {
-            "离线模式"
-        } else if session.asr_active() && session.asr_config.provider.is_cloud() {
-            "云端音频传输中"
-        } else {
-            "上传需授权"
-        };
-        let title = ["实时字幕", "语音服务", "字幕样式", "运行诊断", "模型库"][self.page];
-        let content = match self.page {
-            1 => self.render_services(cx),
-            2 => self.render_appearance(cx),
-            3 => self.render_diagnostics(cx),
-            4 => self.render_models(cx),
-            _ => self.render_live(cx),
-        };
-        column()
-            .gap_0()
-            .size_full()
-            .bg(cx.theme().background)
-            .text_color(cx.theme().foreground)
-            .key_context("Subveil")
-            .track_focus(&self.focus)
-            .on_action(cx.listener(|s, _: &Live, window, cx| s.select_page(0, window, cx)))
-            .on_action(cx.listener(|s, _: &Services, window, cx| s.select_page(1, window, cx)))
-            .on_action(cx.listener(|s, _: &Appearance, window, cx| s.select_page(2, window, cx)))
-            .on_action(cx.listener(|s, _: &Diagnostics, window, cx| s.select_page(3, window, cx)))
-            .on_action(cx.listener(|s, _: &Models, window, cx| s.select_page(4, window, cx)))
-            .on_action(cx.listener(|s, _: &ToggleSidebar, _, cx| s.toggle_sidebar(cx)))
-            .on_action(cx.listener(|s, _: &ToggleOverlay, _, cx| {
-                s.session.update(cx, Session::toggle_overlay)
-            }))
-            .on_action(cx.listener(|s, _: &SaveStyle, _, cx| s.save(cx)))
-            .on_action(cx.listener(|_, _: &ToggleTheme, window, cx| Self::toggle_theme(window, cx)))
-            .child(
-                div()
-                    .flex()
-                    .items_stretch()
-                    .flex_1()
-                    .min_h_0()
-                    .child(self.render_sidebar(cx))
-                    .child(
-                        column()
-                            .gap_0()
-                            .flex_1()
-                            .min_w_0()
-                            .min_h_0()
-                            .child(
-                                row()
-                                    .flex_nowrap()
-                                    .flex_shrink_0()
-                                    .h_12()
-                                    .px_4()
-                                    .border_b_1()
-                                    .border_color(cx.theme().border)
-                                    .child(
-                                        Button::new("toggle-sidebar")
-                                            .icon(IconName::PanelLeft)
-                                            .accessibility_label("折叠或展开侧栏")
-                                            .ghost()
-                                            .small()
-                                            .tooltip("Ctrl+B")
-                                            .on_click(
-                                                cx.listener(|s, _, _, cx| s.toggle_sidebar(cx)),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .text_sm()
-                                            .font_weight(gpui_kit::FontWeight::MEDIUM)
-                                            .child(title),
-                                    )
-                                    .child(
-                                        button(
-                                            "overlay",
-                                            if overlay {
-                                                "隐藏浮窗"
-                                            } else {
-                                                "显示浮窗…"
-                                            },
-                                            &self.session,
-                                            Session::toggle_overlay,
-                                        )
-                                        .icon(if overlay {
-                                            IconName::EyeOff
-                                        } else {
-                                            IconName::Eye
-                                        })
-                                        .ghost()
-                                        .small()
-                                        .tooltip("Ctrl+Shift+O"),
-                                    )
-                                    .child(
-                                        Button::new("theme")
-                                            .icon(if cx.theme().is_dark() {
-                                                IconName::Sun
-                                            } else {
-                                                IconName::Moon
-                                            })
-                                            .accessibility_label("切换明暗外观")
-                                            .ghost()
-                                            .small()
-                                            .tooltip("切换明暗外观 · Ctrl+Shift+L")
-                                            .on_click(|_, window, cx| {
-                                                Self::toggle_theme(window, cx)
-                                            }),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .id(("workspace-scroll", self.page))
-                                    .flex_1()
-                                    .min_h_0()
-                                    .min_w_0()
-                                    .track_scroll(&self.scroll[self.page])
-                                    .overflow_y_scroll()
-                                    .vertical_scrollbar(&self.scroll[self.page])
-                                    .child(
-                                        div()
-                                            .w_full()
-                                            .max_w(gpui_kit::rems(64.))
-                                            .mx_auto()
-                                            .p_6()
-                                            .child(content),
-                                    ),
-                            )
-                            .child(
-                                column()
-                                    .gap_1()
-                                    .px_6()
-                                    .py_2()
-                                    .border_t_1()
-                                    .border_color(cx.theme().border)
-                                    .child(help(message, cx))
-                                    .children(error.map(|error| {
-                                        div().text_sm().text_color(cx.theme().warning).child(error)
-                                    })),
-                            ),
-                    ),
-            )
-            .child(
-                StatusBar::new()
-                    .flex_shrink_0()
-                    .px_3()
-                    .left(
-                        row()
-                            .flex_nowrap()
-                            .text_xs()
-                            .child(Icon::new(IconName::CircleCheck).xsmall())
-                            .child(state),
-                    )
-                    .child(network)
-                    .right("Ctrl+1–5 导航"),
-            )
+    fn toggle_theme(&mut self, cx: &mut Context<Self>) {
+        let scheme = self.session.read(cx).settings.interface_theme.opposite();
+        self.choose_theme(scheme, cx);
     }
 }
 

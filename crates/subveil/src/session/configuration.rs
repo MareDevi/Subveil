@@ -35,6 +35,17 @@ impl Choice {
     ];
 }
 impl Session {
+    /// Change application chrome without recreating the subtitle surface.
+    pub fn set_interface_theme(
+        &mut self,
+        scheme: subveil_core::config::InterfaceTheme,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings.interface_theme = scheme;
+        self.message = "应用配色已更改；保存样式后，下次启动沿用。".into();
+        cx.notify();
+    }
+
     pub fn configuration_busy(&self) -> bool {
         self.asr_active()
             || self.asr_stopping

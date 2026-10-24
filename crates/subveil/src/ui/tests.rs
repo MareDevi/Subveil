@@ -5,6 +5,168 @@ use gpui_kit::test::TestWindowExt;
 use gpui_kit::{Task, TestAppContext};
 
 #[gpui_kit::test]
+fn palettes_sync_component_base_and_saved_settings_without_starting_capture(
+    cx: &mut TestAppContext,
+) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        init(cx);
+    });
+    let path = std::env::temp_dir().join(format!("subveil-theme-test-{}.toml", std::process::id()));
+    let (handle, session) = cx.update(|cx| {
+        let session = cx.new(|_| {
+            let mut s = Session::initial(
+                Default::default(),
+                Some(path.clone()),
+                None,
+                Task::ready(()),
+            );
+            s.restoring_local = false;
+            s
+        });
+        let owner = session.clone();
+        let (handle, _) =
+            gpui_kit::open_window(options("Theme test", 1120., 800., cx), cx, |w, cx| {
+                cx.new(|cx| ControlView::new(owner, w, cx))
+            })
+            .expect("open production view");
+        (handle, session)
+    });
+    cx.update_window(handle, |_, w, cx| {
+        w.render_frame(cx);
+        w.press("ctrl-3", cx);
+    })
+    .expect("open appearance");
+    cx.run_until_parked();
+    for scheme in InterfaceTheme::ALL {
+        cx.update_window(handle, |_, w, cx| {
+            w.click(("interface-theme", scheme as usize), cx);
+        })
+        .expect("select native palette button");
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let s = session.read(cx);
+            assert_eq!(s.settings.interface_theme, scheme);
+            assert!(!s.audio_active());
+            assert!(!s.asr_active());
+            assert!(!s.overlay_enabled());
+            assert_eq!(
+                s.settings.translation_color,
+                subveil_core::config::OverlaySettings::default().translation_color
+            );
+            assert_eq!(cx.theme().is_dark(), scheme.is_dark());
+            assert_eq!(cx.theme().background, theme::palette(scheme).canvas);
+            assert_eq!(cx.theme().tokens.sidebar.color, cx.theme().sidebar);
+            assert_eq!(
+                gpui_kit::base::Theme::global(cx).tokens.colors,
+                cx.theme().semantic_tokens().colors
+            );
+        });
+    }
+    cx.update_window(handle, |_, w, cx| {
+        w.press("ctrl-shift-l", cx);
+    })
+    .expect("toggle same palette family");
+    cx.run_until_parked();
+    cx.update(|cx| {
+        assert_eq!(
+            session.read(cx).settings.interface_theme,
+            InterfaceTheme::SandDark
+        )
+    });
+    cx.update_window(handle, |_, w, cx| {
+        w.press("ctrl-s", cx);
+    })
+    .expect("save appearance");
+    cx.run_until_parked();
+    assert_eq!(
+        crate::storage::load(&path)
+            .expect("saved theme")
+            .interface_theme,
+        InterfaceTheme::SandDark
+    );
+    std::fs::remove_file(path).expect("remove test settings");
+    cx.simulate_window_resize(handle, size(px(760.), px(560.)));
+    cx.update_window(handle, |_, w, cx| {
+        w.press("ctrl-1", cx);
+    })
+    .expect("return to live");
+    cx.run_until_parked();
+    cx.update_window(handle, |_, w, cx| {
+        w.render_frame(cx);
+        assert!(w.find("start-live-subtitles").visible());
+        assert!(w.find("live-preview").visible());
+        assert!(w.find("live-preview").bounds().bottom() <= px(560.));
+        w.press("ctrl-b", cx);
+    })
+    .expect("minimum window keeps primary task visible");
+}
+
+/// Explicit visual QA: real system text shaping and GPU rasterization, no devices or network.
+#[test]
+#[ignore = "requires a working GPU renderer; writes review images under /tmp"]
+fn render_workspace_review_images() -> anyhow::Result<()> {
+    let platform = gpui_kit::platform::current_platform(true);
+    let mut cx = gpui_kit::HeadlessAppContext::with_platform(
+        platform.text_system(),
+        std::sync::Arc::new(gpui_kit::assets::Assets),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        init(cx);
+    });
+    let session = cx.new(|_| {
+        let mut s = Session::initial(Default::default(), None, None, Task::ready(()));
+        s.restoring_local = false;
+        crate::mock::advance(&mut s.subtitles, 8, 2000);
+        crate::mock::advance(&mut s.subtitles, 12, 3000);
+        s
+    });
+    let view_owner = session.clone();
+    let mut view = None;
+    let handle = cx.open_window(size(px(1120.), px(800.)), |w, cx| {
+        let control = cx.new(|cx| ControlView::new(view_owner, w, cx));
+        view = Some(control.clone());
+        cx.new(|cx| Root::new(control, w, cx))
+    })?;
+    let view = view.ok_or_else(|| anyhow::anyhow!("missing production view"))?;
+    let directory = std::path::Path::new("/tmp/subveil-ui-review");
+    std::fs::create_dir_all(directory)?;
+    for scheme in InterfaceTheme::ALL {
+        for page in 0..5 {
+            cx.update(|cx| theme::apply(scheme, cx));
+            cx.update_window(handle.into(), |_, w, cx| {
+                session.update(cx, |s, _| s.settings.interface_theme = scheme);
+                view.update(cx, |s, cx| s.select_page(page, w, cx));
+                w.render_frame(cx);
+            })?;
+            cx.run_until_parked();
+            cx.update_window(handle.into(), |_, w, cx| w.render_frame(cx))?;
+            cx.capture_screenshot(handle.into())?
+                .save(directory.join(format!("theme-{}-page-{page}.png", scheme as usize)))?;
+        }
+    }
+    for (page, count) in [(1, 3), (4, 4)] {
+        for tab in 0..count {
+            cx.update_window(handle.into(), |_, w, cx| {
+                view.update(cx, |s, cx| {
+                    s.service_tab = tab;
+                    s.model_tab = tab;
+                    s.select_page(page, w, cx);
+                });
+                w.render_frame(cx);
+            })?;
+            cx.run_until_parked();
+            cx.update_window(handle.into(), |_, w, cx| w.render_frame(cx))?;
+            cx.capture_screenshot(handle.into())?
+                .save(directory.join(format!("page-{page}-tab-{tab}.png")))?;
+        }
+    }
+    Ok(())
+}
+
+#[gpui_kit::test]
 fn stop_preserves_history_clear_rejects_running_and_navigation_restores_focus(
     cx: &mut TestAppContext,
 ) {
@@ -154,6 +316,17 @@ fn model_search_preserves_selection_and_endpoint_requires_explicit_apply(cx: &mu
                 .iter()
                 .all(|m| !s.model_filter.matches(m))
         );
+        window.within("model-tabs").click(3usize, cx);
+        for _ in 0..10 {
+            if window.find("download-origin").visible() {
+                break;
+            }
+            window.scroll(
+                ("workspace-scroll", 4usize),
+                gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-400.))),
+                cx,
+            );
+        }
         window.click("download-origin", cx);
         window.press("ctrl-a", cx);
         window.input("https://mirror.example", cx);

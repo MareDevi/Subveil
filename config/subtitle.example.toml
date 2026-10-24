@@ -1,6 +1,9 @@
 # Copy this file to $XDG_CONFIG_HOME/subveil/subtitle.toml, or use --config PATH.
 # Changes are loaded on startup. The control window saves only on explicit request.
 # Colors are 24-bit RGB integers. Opacity affects only the panel background.
+# App palette: graphite_dark, graphite_light, indigo_dark, indigo_light,
+# sand_dark, or sand_light. Subtitle text and panel colors remain independent.
+interface_theme = "graphite_dark"
 font_family = "sans-serif"
 font_size = 32.0
 source_ratio = 0.75
